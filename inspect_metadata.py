@@ -6,8 +6,8 @@ Created on Sun Dec 15 16:52:10 2024
 """
 
 from pylibCZIrw import czi as pyczi
-
-
+from matplotlib import pyplot as plt
+import time
 def get_metadata(czidoc, channel_to_use):
     
     # Read out some metadata
@@ -26,10 +26,20 @@ def get_metadata(czidoc, channel_to_use):
         Frame_time_s = float(metadata['Information']['Image']['Dimensions']['Channels']['Channel']['LaserScanInfo']['FrameTime'])
         line_time_ms = Pixel_dwell_time_us*Pixels_in_x*1e-3
 
-    return Pixel_size_nm, Pixel_dwell_time_us, line_time_ms
+    return Pixel_size_nm, Pixel_dwell_time_us, line_time_ms, metadata
 
 
 
 if __name__ == '__main__':
-    
+    # metadata_path = r'Z:\_Data\positions_image.czi'
+    # with pyczi.open_czi(metadata_path) as czidoc:
+    #     _,_,_,metadata = get_metadata(czidoc, 0)
+    #     total_bounding_rectangle = czidoc.total_bounding_rectangle
+            
+    #     data_frame = czidoc.read(roi = total_bounding_rectangle,
+    #                              scene = 2,
+    #                              plane = {'C':0})
+    #     data_frame = data_frame.reshape([data_frame.shape[0], data_frame.shape[1]])
+    #     print(data_frame.mean())
+    #     plt.imshow(data_frame)
     pass
