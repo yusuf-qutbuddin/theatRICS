@@ -1522,7 +1522,11 @@ class ModularRICSGUI:
                     self.current_rics_map = None # reset the RICS map
                     # Update display
                     self.root.after(0, self.update_fitting_display)
-
+                    if hasattr(self, 'fit_1d_var') and self.fit_1d_var.get():
+                        # Perform 1D fitting when checked
+                        self.run_1d_fitting()
+                    else:
+                        pass
             except Exception as e:
                 self.log_message(f"Fitting error: {str(e)}")
                 import traceback
