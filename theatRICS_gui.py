@@ -45,12 +45,13 @@ import pandas as pd
 class ModularRICSGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("theatRICS/MATRICS")
+        self.root.title("theatRICS")
         
         self.root.geometry("1400x900")
 
         # Initialize variables
         self.current_image_stack = None
+        self.current_file = None
         self.current_corrected_stack = None
         self.current_rics_map = None
         self.diffusion_map = None
@@ -438,8 +439,8 @@ class ModularRICSGUI:
         fit_button_frame.grid(row=row, column=0, columnspan=2, pady=10)
         
         ttk.Button(fit_button_frame, text="Run 2D/3D Fitting", command=self.run_fitting).pack(side=tk.LEFT, padx=5)
-        ttk.Button(fit_button_frame, text="1D Fast Axis Fit", command=self.run_1d_fitting).pack(side=tk.LEFT, padx=5)
-        
+        self.fit_1d_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fit_button_frame, text="1D Fast Axis Fit", variable=self.fit_1d_var).pack(side=tk.LEFT, padx=5)        
         
 
         
@@ -1238,6 +1239,7 @@ class ModularRICSGUI:
         if not self.rics_file.get() and self.batch_fit_folder.get():
             files = get_files_from_folder(self.batch_fit_folder.get(), '.tif', 'RICScorr')
             for file in files:
+                self.current_file = file
                 try:
                     # Load RICS map if needed
                     
@@ -1245,7 +1247,10 @@ class ModularRICSGUI:
                     self.current_rics_map = tifffile.imread(file)
                     self.log_message(f"Loaded RICS map for fitting: {file}")
                     root, ext = os.path.splitext(file)
-                    metadata_file = os.path.split(root)[1].split('_')[0] + '.czi'
+
+                    metadata_file = os.path.split(root)[1].split('_')
+                    metadata_file = metadata_file[:-1]
+                    metadata_file = '_'.join(metadata_file) + '.czi'
                     metadata_path = os.path.join(os.path.split(root)[0], metadata_file)
                     if self.current_rics_map is None:
                         raise ValueError("No RICS map available for fitting")
@@ -1370,7 +1375,11 @@ class ModularRICSGUI:
                     self.current_rics_map = None # reset the RICS map
                     # Update display
                     self.root.after(0, self.update_fitting_display)
-
+                    if hasattr(self, 'fit_1d_var') and self.fit_1d_var.get():
+                        # Perform 1D fitting when checked
+                        self.run_1d_fitting()
+                    else:
+                        pass
                 except Exception as e:
                     self.log_message(f"Fitting error: {str(e)}")
                     import traceback
@@ -1386,7 +1395,9 @@ class ModularRICSGUI:
                     self.current_rics_map = tifffile.imread(file)
                     self.log_message(f"Loaded RICS map for fitting: {file}")
                     root, ext = os.path.splitext(file)
-                    metadata_file = os.path.split(root)[1].split('_')[0] + '.czi'
+                    metadata_file = os.path.split(root)[1].split('_')
+                    metadata_file = metadata_file[:-1]
+                    metadata_file = '_'.join(metadata_file) + '.czi'
                     metadata_path = os.path.join(os.path.split(root)[0], metadata_file)
                     if self.current_rics_map is None:
                         raise ValueError("No RICS map available for fitting")
@@ -1525,10 +1536,6 @@ class ModularRICSGUI:
             messagebox.showerror("Error", "Fitting module not loaded!")
             return
 
-        if self.fit_results is None:
-            messagebox.showwarning("Warning", "Please run 2D/3D fitting first to initialize the fitter")
-            return
-
         self.log_message("Running 1D fast axis fitting...")
         self.status_var.set("Running 1D fitting...")
 
@@ -1539,6 +1546,8 @@ class ModularRICSGUI:
     def _run_1d_fitting_thread(self):
         """Thread for 1D fitting"""
         try:
+            file = self.current_file
+
             fitter = self.fit_results['fitter']
 
             # Run 1D fit
@@ -1558,7 +1567,17 @@ class ModularRICSGUI:
             self.fit_results['model_1D'] = model_1D
             self.fit_results['residual_1D'] = residual_1D
             self.fit_results['diffusion_coeff_1D'] = diffusion_coeff_1D
-
+            fit_results = []
+            fit_results.append({'filepath': file,
+                    'Diffusion Coefficient': diffusion_coeff_1D,
+                    'residual': np.mean(residual_1D)
+                    })
+            results_df = pd.DataFrame(fit_results)
+            output_csv = self.saving_path.get()
+            root, ext = os.path.splitext(output_csv)
+            root = root + '_1D'
+            output_csv = root + ext
+            results_df.to_csv(output_csv, index=False, mode = 'a')
             # Update display
             self.root.after(0, self.update_fitting_display)
 

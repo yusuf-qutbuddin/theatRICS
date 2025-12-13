@@ -31,15 +31,17 @@ def get_metadata(czidoc, channel_to_use):
 
 
 if __name__ == '__main__':
-    # metadata_path = r'Z:\_Data\positions_image.czi'
-    # with pyczi.open_czi(metadata_path) as czidoc:
-    #     _,_,_,metadata = get_metadata(czidoc, 0)
-    #     total_bounding_rectangle = czidoc.total_bounding_rectangle
+    metadata_path = r'X:\Mamot_Adam\Analysis_Yusuf\20250818_Adam\256-256_after_T7_20cyc_b07_repeat\Experiment-6902.czi'
+    with pyczi.open_czi(metadata_path) as czidoc:
+        Pixel_size_nm,Pixel_dwell_time_us,line_time_ms = get_metadata(czidoc, 0)
+        # total_bounding_rectangle = czidoc.total_bounding_rectangle
             
-    #     data_frame = czidoc.read(roi = total_bounding_rectangle,
-    #                              scene = 2,
-    #                              plane = {'C':0})
-    #     data_frame = data_frame.reshape([data_frame.shape[0], data_frame.shape[1]])
-    #     print(data_frame.mean())
-    #     plt.imshow(data_frame)
+        # data_frame = czidoc.read(roi = total_bounding_rectangle,
+        #                          plane = {'C':0})
+        # data_frame = data_frame.reshape([data_frame.shape[0], data_frame.shape[1]])
+        print(Pixel_size_nm)
+        print(Pixel_dwell_time_us)
+        print(line_time_ms)
+
+
     pass
