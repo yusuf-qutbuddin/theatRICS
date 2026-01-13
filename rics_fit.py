@@ -271,6 +271,113 @@ class RICS_fit():
        
        return fit_params, model, residual
 
+    def rics_2comp2Ddiff_func(self,
+                    N1,
+                    N2,
+                    fact,
+                    diff_coeff_2,
+                    offset):
+     
+        # Initialize map
+        rics_model = np.ones_like(self.data_RICS,
+                                  dtype = np.float64)
+        term_1 = np.ones_like(self.data_RICS,
+                                  dtype = np.float64)
+        term_2 = np.ones_like(self.data_RICS,
+                                  dtype = np.float64)
+
+        # Apply amplitude 
+        rics_model*= 0.5/(N1+N2)**2
+
+
+        # the two terms for 2 components
+        term_1 *= N1
+        term_1 /= 1 + 4 * fact*diff_coeff_2 * self.temporal_lag_map / self.psf_size_xy_um**2
+        term_1 *= np.exp(- self.spatial_lag_map / (4 * fact*diff_coeff_2 * self.temporal_lag_map + self.psf_size_xy_um**2))
+
+        term_2 *= N2
+        term_2 /= 1 + 4 * diff_coeff_2 * self.temporal_lag_map / self.psf_size_xy_um**2
+        term_2 *= np.exp(- self.spatial_lag_map / (4 * diff_coeff_2 * self.temporal_lag_map + self.psf_size_xy_um**2))
+
+
+        # Apply xy diffusion term
+        rics_model *= (term_1 + term_2)
+        
+       
+        # Add offset
+        rics_model += offset
+        return rics_model
+    def rics_2comp2Ddiff_residual(self,
+                        params):
+        # Evaluate model
+        rics_model = self.rics_2comp2Ddiff_func(params['N1'].value,
+                                         params['N2'].value,
+                                         params['fact'].value,
+                                         params['diff_coeff2'].value,
+                                         params['offset'].value)
+        # Get residual
+        residual = rics_model - self.data_RICS
+        
+        return residual
+    def rics_2comp2Ddiff_cost(self,
+                   params):
+        # Get residual
+        residual = self.rics_2comp2Ddiff_residual(params)
+        
+        # Zero the center pixel residual - that one is not considered in fitting!
+        residual[self.center_slow_ax, self.center_fast_ax] = 0.
+        
+        # Average to get cost
+        cost = np.sum(residual**2)
+        
+        return cost  
+    def run_2comp2Ddiff_fit(self):
+       # Initial parameters
+       init_params = lmfit.Parameters()
+       init_params.add(name = 'N1',
+                       value = 1.,
+                       vary = True,
+                       min = 0.,
+                       max = np.max(self.data_RICS) * 1.5)
+       init_params.add(name = 'N2',
+                       value = 1.,
+                       vary = True,
+                       min = 0.,
+                       max = np.max(self.data_RICS) * 1.5)
+       init_params.add(name = 'fact',
+                       value = 1.,
+                       vary = True,
+                       min = 1,
+                       max = 1e4)
+       init_params.add(name = 'diff_coeff2',
+                       value = 1.,
+                       vary = True,
+                       min = 1e-3,
+                       max = 1e4)
+       init_params.add(name = 'offset',
+                       value = 0.,
+                       vary = True,
+                       min = -np.max(self.data_RICS) / 10.,
+                       max = np.max(self.data_RICS) / 10.)
+       
+       # Run fit
+       result = lmfit.minimize(self.rics_2comp2Ddiff_cost,
+                               params = init_params, 
+                               method = 'basinhopping')
+       
+       fit_params = result.params
+       model = self.rics_2comp2Ddiff_func(fit_params['N1'].value,
+                                   fit_params['N2'].value,
+                                   fit_params['fact'],
+                                   fit_params['diff_coeff2'].value,
+                                   fit_params['offset'].value)
+       residual = self.rics_2comp2Ddiff_residual(fit_params)
+       center_y = residual.shape[0] // 2
+       center_x = residual.shape[1] // 2
+       residual[center_y, center_x] = 0.0
+       
+       return fit_params, model, residual
+
     def fast_axis_diff_func(self, amplitude, diff_coeff, offset):
         # Initialize map
         rics_model = np.ones_like(self.data_RICS_1D,

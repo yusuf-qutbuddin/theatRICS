@@ -422,7 +422,7 @@ class ModularRICSGUI:
         ttk.Label(fit_params, text="Diffusion model:").grid(row=row, column=0, sticky='w', pady=2)
         self.diffusion_model = tk.StringVar(value="2Ddiff")
         model_combo = ttk.Combobox(fit_params, textvariable=self.diffusion_model, 
-                                   values=["2Ddiff", "3Ddiff"], width=12)
+                                   values=["2Ddiff", "3Ddiff", "2comp2Ddiff"], width=12)
         model_combo.grid(row=row, column=1, pady=2)
 
         row+=1
@@ -1485,7 +1485,32 @@ class ModularRICSGUI:
                         results_df = pd.DataFrame(fit_results)
                         output_csv = self.saving_path.get()
                         results_df.to_csv(output_csv, index=False, mode = 'a')
-                        
+                    
+                    elif diffusion_model == "2comp2Ddiff":
+                        fit_params, model, residual = fitter.run_2comp2Ddiff_fit()
+                        diffusion_coeff1 = fit_params['fact'].value * fit_params['diff_coeff2'].value
+                        diffusion_coeff2 = fit_params['diff_coeff2'].value
+                        N1 = fit_params['N1'].value
+                        N2 = fit_params['N2'].value
+                        offset = fit_params['offset'].value
+                        # N = float(0.5 / amplitude)
+                        self.log_message("2 component 2D Diffusion fitting results:")
+                        self.log_message(f"  Diffusion coefficient 1: {diffusion_coeff1:.3f} μm²/s")
+                        self.log_message(f"  Diffusion coefficient 2: {diffusion_coeff2:.3f} μm²/s")
+                        self.log_message(f"  N1: {N1:.6f}")
+                        self.log_message(f"  N2: {N2:.6f}")
+                        self.log_message(f"  Offset: {offset:.6f}")
+                        fit_results = []
+                        fit_results.append({'filepath': file,
+                                'Particle Number 1': N1,
+                                'Diffusion Coefficient 1': diffusion_coeff1,
+                                'Particle Number 2': N2,
+                                'Diffusion Coefficient 2': diffusion_coeff2,
+                                'residual': np.mean(residual)
+                                })
+                        results_df = pd.DataFrame(fit_results)
+                        output_csv = self.saving_path.get()
+                        results_df.to_csv(output_csv, index=False, mode = 'a')
 
                     else:  # 3Ddiff
                         fit_params, model, residual = fitter.run_3Ddiff_fit()
@@ -1507,18 +1532,34 @@ class ModularRICSGUI:
                         results_df = pd.DataFrame(fit_results)
                         output_csv = self.saving_path.get()
                         results_df.to_csv(output_csv, index=False, mode = 'a')
+                    if diffusion_model != "2comp2Ddiff":
+                        self.fit_results = {
+                            'rics_map': rics_map,
+                            'model': model,
+                            'residual': residual,
+                            'diffusion_coeff': diffusion_coeff,
+                            'amplitude': amplitude,
+                            'offset': offset,
+                            'fit_params': fit_params,
+                            'fitter': fitter,
+                            'model_type': diffusion_model
+                        }
+                    else:
+                        self.fit_results = {
+                            'rics_map': rics_map,
+                            'model': model,
+                            'residual': residual,
+                            'diffusion_coeff1': diffusion_coeff1,
+                            'diffusion_coeff2': diffusion_coeff2,
 
-                    self.fit_results = {
-                        'rics_map': rics_map,
-                        'model': model,
-                        'residual': residual,
-                        'diffusion_coeff': diffusion_coeff,
-                        'amplitude': amplitude,
-                        'offset': offset,
-                        'fit_params': fit_params,
-                        'fitter': fitter,
-                        'model_type': diffusion_model
-                    }
+                            'N1': N1,
+                            'N2': N2,
+
+                            'offset': offset,
+                            'fit_params': fit_params,
+                            'fitter': fitter,
+                            'model_type': diffusion_model
+                        }
                     self.current_rics_map = None # reset the RICS map
                     # Update display
                     self.root.after(0, self.update_fitting_display)
