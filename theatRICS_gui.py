@@ -1818,10 +1818,10 @@ class ModularRICSGUI:
             # Create our own display matching your layout
             if 'model_1D' in self.fit_results:
                 # If 1D fit is available, show both 2D/3D and 1D results
-                gs = gridspec.GridSpec(3, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1], height_ratios=[1, 1, 1])
+                gs = gridspec.GridSpec(4, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1], height_ratios=[1, 1, 1])
             else:
                 # Only 2D/3D results
-                gs = gridspec.GridSpec(2, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1])
+                gs = gridspec.GridSpec(3, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1])
 
             # Create coordinate arrays for 3D plots
             X = np.arange(self.fit_results['rics_map'].shape[1])
@@ -1847,15 +1847,24 @@ class ModularRICSGUI:
             ax3.view_init(elev=20, azim=90)
 
             # 1D cross-section comparison
-            ax4 = self.fit_fig.add_subplot(gs[1, :])
+            ax4a = self.fit_fig.add_subplot(gs[1, :])
             center = self.fit_results['rics_map'].shape[0] // 2
             x_axis = np.arange(self.fit_results['rics_map'].shape[1]) - self.fit_results['rics_map'].shape[1]//2
 
-            ax4.plot(x_axis, self.fit_results['rics_map'][center, :], 'ko-', 
+            ax4a.plot(x_axis, self.fit_results['rics_map'][center, :], 'ko-',
                     label='Data (Fast axis)', markersize=4, linewidth=1)
-            ax4.plot(x_axis, self.fit_results['model'][center, :], 'r-', 
+            ax4a.plot(x_axis, self.fit_results['model'][center, :], 'r-',
                     label=f'{self.fit_results["model_type"]} Fit (D={self.fit_results["diffusion_coeff"]:.3f} μm²/s)', 
                     linewidth=2)
+            ax4b = self.fit_fig.add_subplot(gs[2, :])
+            center = self.fit_results['rics_map'].shape[1] // 2
+            x_axis = np.arange(self.fit_results['rics_map'].shape[0]) - self.fit_results['rics_map'].shape[0] // 2
+
+            ax4b.plot(x_axis, self.fit_results['rics_map'][:, center], 'ko-',
+                     label='Data (Fast axis)', markersize=4, linewidth=1)
+            ax4b.plot(x_axis, self.fit_results['model'][:, center], 'r-',
+                     label=f'{self.fit_results["model_type"]} Fit (D={self.fit_results["diffusion_coeff"]:.3f} μm²/s)',
+                     linewidth=2)
 
             # Add 1D fit if available
             if 'model_1D' in self.fit_results:
@@ -1863,15 +1872,19 @@ class ModularRICSGUI:
                         label=f'1D Fit (D={self.fit_results["diffusion_coeff_1D"]:.3f} μm²/s)', 
                         linewidth=2)
 
-            ax4.set_xlabel('Pixel lag')
-            ax4.set_ylabel('Correlation')
-            ax4.set_title('1D Cross-section Fits')
-            ax4.legend()
-            ax4.grid(True, alpha=0.3)
-
+            ax4a.set_xlabel('Pixel lag')
+            ax4a.set_ylabel('Correlation')
+            ax4a.set_title('1D Cross-section Fits (fast)')
+            ax4a.legend()
+            ax4a.grid(True, alpha=0.3)
+            ax4b.set_xlabel('Pixel lag')
+            ax4b.set_ylabel('Correlation')
+            ax4b.set_title('1D Cross-section Fits (slow)')
+            ax4b.legend()
+            ax4b.grid(True, alpha=0.3)
             # If 1D residuals available, show them
             if 'residual_1D' in self.fit_results:
-                ax5 = self.fit_fig.add_subplot(gs[2, :])
+                ax5 = self.fit_fig.add_subplot(gs[3, :])
                 ax5.plot(x_axis, self.fit_results['residual_1D'], 'g.-', alpha=0.7, label='1D Residuals')
                 ax5.axhline(0, color='k', linestyle='--', alpha=0.5)
                 ax5.set_xlabel('Pixel lag')
@@ -1891,8 +1904,28 @@ class ModularRICSGUI:
                 ax6.axis('off')
                 self.fit_fig.colorbar(im6, ax=ax6, fraction=0.046, pad=0.04)
 
+
+            # root, ext = os.path.splitext(self.current_file)  # ext == ".tif"
+            # fit_name = root + "_fit.png"
+            # self.log_message(self, str(fit_name))
+            # if self.batch_fit_folder.get():
+            #     fit_name = os.path.join(self.batch_fit_folder.get(), fit_name)
+            #
+            # self.fit_fig.savefig(fit_name, dpi=300)
+
             self.fit_fig.tight_layout()
             self.fit_canvas.draw()
+
+            if self.batch_fit_folder.get():
+                root, ext = os.path.splitext(self.current_file)
+                root = root + "_fit.svg"
+                self.fit_fig.savefig(os.path.join(self.batch_fit_folder.get(), root),
+                                 dpi=300, bbox_inches='tight', facecolor='white')
+            elif self.rics_file.get():
+                root, ext = os.path.splitext(self.rics_file.get())
+                root = root + "_fit.svg"
+                self.fit_fig.savefig(root,
+                                     dpi=300, bbox_inches='tight', facecolor='white')
         elif self.diffusion_map is not None and self.B_map is not None and self.N_map is not None:
             self.fit_fig.clear()
             gs = gridspec.GridSpec(2, 3, figure=self.fit_fig, width_ratios = [1,1,1])
@@ -1954,6 +1987,7 @@ class ModularRICSGUI:
 
 
             self.fit_fig.tight_layout()
+
             self.fit_canvas.draw()
 
     
