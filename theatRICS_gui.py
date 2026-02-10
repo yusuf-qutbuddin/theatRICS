@@ -1562,12 +1562,14 @@ class ModularRICSGUI:
                         }
                     self.current_rics_map = None # reset the RICS map
                     # Update display
+
                     self.root.after(0, self.update_fitting_display)
                     if hasattr(self, 'fit_1d_var') and self.fit_1d_var.get():
                         # Perform 1D fitting when checked
                         self.run_1d_fitting()
                     else:
                         pass
+
             except Exception as e:
                 self.log_message(f"Fitting error: {str(e)}")
                 import traceback
@@ -1818,7 +1820,7 @@ class ModularRICSGUI:
             # Create our own display matching your layout
             if 'model_1D' in self.fit_results:
                 # If 1D fit is available, show both 2D/3D and 1D results
-                gs = gridspec.GridSpec(4, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1], height_ratios=[1, 1, 1])
+                gs = gridspec.GridSpec(4, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1], height_ratios=[1, 1, 1, 1])
             else:
                 # Only 2D/3D results
                 gs = gridspec.GridSpec(3, 4, figure=self.fit_fig, width_ratios=[1, 1, 1, 1])
@@ -1868,7 +1870,7 @@ class ModularRICSGUI:
 
             # Add 1D fit if available
             if 'model_1D' in self.fit_results:
-                ax4.plot(x_axis, self.fit_results['model_1D'], 'g--', 
+                ax4a.plot(x_axis, self.fit_results['model_1D'], 'g--',
                         label=f'1D Fit (D={self.fit_results["diffusion_coeff_1D"]:.3f} μm²/s)', 
                         linewidth=2)
 
