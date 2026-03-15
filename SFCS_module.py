@@ -15,6 +15,7 @@ import pandas as pd
 # for i in range(n_lines):
 #     center = np.random.normal(n_pixels//2, 2)
 #     data[i, max(0, int(center-3)):min(n_pixels, int(center+3))] += np.random.poisson(500, 6)
+
 def read_frame(filepath,
                channel):
     with pyczi.open_czi(filepath) as czidoc:
@@ -31,18 +32,18 @@ def read_frame(filepath,
     return data_frame, Frame_time_s
 
 def gaussian(x, amp, cen, sigma):
-    return amp * np.exp(-(x - cen) ** 2 / (2 * sigma ** 2))
+        return amp * np.exp(-(x - cen) ** 2 / (2 * sigma ** 2))
 
+def fit_gaussian_line(args):
 
-def fit_gaussian_line(i, line_data, x, n_pixels):
     """Fitting function for multiprocessing - unpacks (i, line_data, x, n_pixels)"""
-
-
+    (i, line_data, x, n_pixels) = args
     y = line_data.astype(float)
 
     # Skip empty / almost flat lines
     if np.allclose(y, 0) or np.nanmax(y) <= 0:
-        return i, np.argmax(y), 5.0
+        result = (i,np.argmin(y),5.0)
+        return result
 
     y_smooth = gaussian_filter1d(y, sigma=1)
 
@@ -64,10 +65,12 @@ def fit_gaussian_line(i, line_data, x, n_pixels):
             bounds=bounds,
             maxfev=2000
         )
-        return i, popt[1], abs(popt[2])
+        result = (i, popt[1], abs(popt[2]))
+        return result
     except Exception:
         # Fallback: simple maximum
-        return i, np.argmax(y_smooth), sig0
+        result = (i, np.argmax(y_smooth), sig0)
+        return result
 
 
 def wohland_bootstrap(intensity_traces, line_time_s,G_lags, n_synthetic=500, n_pairs_per_lag=1000):
@@ -120,62 +123,22 @@ def run_autocorrelation(intensity_traces, line_time_s, root):
     correlate_df.to_csv(root+'_correlation.csv',
                         index=False, header = False)
     # Plot
-    plt.semilogx(G[:, 0], G[:, 1], 'k-', linewidth=2, label='G(τ)')
-    plt.fill_between(G[:, 0], G[:, 1] - G_std, G[:, 1] + G_std, alpha=0.3, color='gray', label='±1σ (Wohland)')
-    plt.xlabel('Lag time (s)')
-    plt.ylabel('G(τ)')
-    plt.title('FCS Autocorrelation')
-    plt.grid(True, alpha=0.3)
-    plt.savefig(root+"_correlation.svg")
-    plt.close()
-
-def read_intensity_traces(csv_path):
-    """
-    Read intensity traces from no-header CSV (2 columns: line_number, intensity)
-    Returns: numpy array of intensity values
-    """
-    data = np.loadtxt(csv_path, delimiter=',',skiprows=1,  usecols=(1))  # Column 1 = intensity
-    return data
-
-# Usage
-if __name__ == "__main__":
+    return G, G_std
 
 
-
-    filepath = r'X:\AlNahas_Kareem\Raquel_mastersproject\20260220_sfcs\New-09_xy.czi'
+def read_file(filepath, channel):
     root, ext = os.path.splitext(filepath)
-    channel_to_use = 0
+    channel_to_use = channel
     frame_data, line_time_s = read_frame(filepath, channel_to_use)
 
-    tiff.imwrite(root+".tif", frame_data)
+    tiff.imwrite(root + ".tif", frame_data)
     n_lines = frame_data.shape[0]
     n_pixels = frame_data.shape[1]
     frame_data = frame_data.reshape(n_lines, n_pixels)
     x = np.arange(n_pixels)
-    # Prepare arguments for multiprocessing
-    args_list = [(i, frame_data[i], x, n_pixels) for i in range(n_lines)]
 
-    # Parallel Gaussian fitting - uses all available CPU cores
-    print("Fitting Gaussians with multiprocessing...")
-    pool = multiprocessing.Pool(processes=20)
-    results = pool.starmap(fit_gaussian_line, args_list)
-
-    # Unpack results (maintain original order)
-    peaks = np.full(n_lines, 0.0)
-    sigmas = np.full(n_lines, 5.0)
-    for i, peak, sigma in results:
-        peaks[i] = peak
-        sigmas[i] = sigma
-
-    print(f"Fitting complete. Found {np.sum(sigmas > 0)} valid peaks.")
-    # for i in range(n_lines):
-    #     y_smooth = gaussian_filter1d(frame_data[i], sigma=1)
-    #     try:
-    #         popt, _ = curve_fit(gaussian, x, y_smooth, p0=[np.max(y_smooth), n_pixels//2, 5])
-    #         peaks[i], sigmas[i] = popt[1], np.abs(popt[2])  # Ensure positive sigma
-    #     except:
-    #         peaks[i] = np.argmax(y_smooth)
-
+    return frame_data, line_time_s, x, n_lines, n_pixels, root
+def alignment(frame_data, n_pixels, n_lines, root, peaks):
     # #alignment
     center_target = n_pixels // 2
     aligned_data = np.zeros_like(frame_data)
@@ -184,11 +147,15 @@ if __name__ == "__main__":
         aligned_data[i] = np.roll(frame_data[i], shift_amt)
 
     # Save as TIFF; shape is (n_lines, n_pixels)
-    tiff.imwrite(root+"_aligned.tif", aligned_data)
+    tiff.imwrite(root + "_aligned.tif", aligned_data)
+    return aligned_data
 
+def calculate_intensity_trace(aligned_data, n_lines, n_pixels, sigmas, root):
     # Make the intensity trace here
     # Sum photons in ±2.5σ window per line for intensity trace
     intensity_traces = np.zeros(n_lines)
+    center_target = n_pixels // 2
+
     for i in range(n_lines):
         half_width = 2.5 * sigmas[i]
         start = max(0, int(center_target - half_width))
@@ -199,16 +166,64 @@ if __name__ == "__main__":
         'line_number': range(len(intensity_traces)),
         'intensity': intensity_traces
     })
-    intensity_df.to_csv(root+"_intensity_trace.csv", index=False)
-
-
-    plt.plot(intensity_traces)
-    plt.xlabel('Line #')
-    plt.ylabel('Intensity')
-    plt.savefig(root+"_intensity_trace.svg")
-    plt.close()
-    
-    
-    run_autocorrelation(intensity_traces, line_time_s, root)
-
+    intensity_df.to_csv(root + "_intensity_trace.csv", index=False)
+    return intensity_traces
+# Usage
+if __name__ == "__main__":
+    pass
+    #
+    # filepath = r'X:\AlNahas_Kareem\Raquel_mastersproject\20260220_sfcs\New-09_xy.czi'
+    #
+    # # Prepare arguments for multiprocessing
+    # args_list = [(i, frame_data[i], x, n_pixels) for i in range(n_lines)]
+    #
+    # # Parallel Gaussian fitting - uses all available CPU cores
+    # print("Fitting Gaussians with multiprocessing...")
+    # pool = multiprocessing.Pool(processes=20)
+    # results = pool.starmap(fit_gaussian_line, args_list)
+    #
+    # # Unpack results (maintain original order)
+    # peaks = np.full(n_lines, 0.0)
+    # sigmas = np.full(n_lines, 5.0)
+    # for i, peak, sigma in results:
+    #     peaks[i] = peak
+    #     sigmas[i] = sigma
+    #
+    # print(f"Fitting complete. Found {np.sum(sigmas > 0)} valid peaks.")
+    # # for i in range(n_lines):
+    # #     y_smooth = gaussian_filter1d(frame_data[i], sigma=1)
+    # #     try:
+    # #         popt, _ = curve_fit(gaussian, x, y_smooth, p0=[np.max(y_smooth), n_pixels//2, 5])
+    # #         peaks[i], sigmas[i] = popt[1], np.abs(popt[2])  # Ensure positive sigma
+    # #     except:
+    # #         peaks[i] = np.argmax(y_smooth)
+    #
+    #
+    #
+    # # Make the intensity trace here
+    # # Sum photons in ±2.5σ window per line for intensity trace
+    # intensity_traces = np.zeros(n_lines)
+    # for i in range(n_lines):
+    #     half_width = 2.5 * sigmas[i]
+    #     start = max(0, int(center_target - half_width))
+    #     end = min(n_pixels, int(center_target + half_width))
+    #     intensity_traces[i] = np.sum(aligned_data[i, start:end])
+    #
+    # intensity_df = pd.DataFrame({
+    #     'line_number': range(len(intensity_traces)),
+    #     'intensity': intensity_traces
+    # })
+    # intensity_df.to_csv(root+"_intensity_trace.csv", index=False)
+    #
+    #
+    # plt.plot(intensity_traces)
+    # plt.xlabel('Line #')
+    # plt.ylabel('Intensity')
+    # plt.savefig(root+"_intensity_trace.svg")
+    # plt.close()
+    #
+    #
+    # run_autocorrelation(intensity_traces, line_time_s, root)
+    #
+    # #
     #

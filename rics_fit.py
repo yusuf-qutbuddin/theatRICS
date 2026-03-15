@@ -18,43 +18,43 @@ import pandas as pd
 import inspect_metadata as im
 
 
-
-folder = r'/fs/pool/pool-schwille-user/Qutbuddin_Yusuf/_Protocols/RICS_fit/Sample_Data/Simulations/Sim_2_90'
-file_extension = '.tif' # or '.czi'
-ending_word = 'RICScorr'
-save_path = os.path.join(folder, 'Results')
-
-PSF_size_xy = 0.2
-PSF_aspect_ratio = 4.985423166
-crop_factor_fast_ax = 0.5
-crop_factor_slow_ax = 0.5
-file_for_metadata = ''
-
-if file_for_metadata:
-    metadata_path = os.path.join(folder, file_for_metadata)
-    with pyczi.open_czi(metadata_path) as czidoc:
-        Pixel_size_nm, Pixel_dwell_time_us, line_time_ms = im.get_metadata(czidoc)
-        
-else:
-    
-    # Parameters
-    Pixel_size_nm = 20 #nm
-    Pixel_dwell_time_us = 50 #us
-    line_time_ms = 12.8#ms
-    
-
-# Models 
-# diffusion_model = '3Ddiff'
-diffusion_model = '2Ddiff'
-
-
-# paramnter rescaling
-pixel_size_um = Pixel_size_nm * 1e-3
-psf_size_xy_um = PSF_size_xy
-psf_aspect_ratio = PSF_aspect_ratio
-pixel_time_s = Pixel_dwell_time_us * 1e-6
-line_time_s = line_time_ms * 1e-3
-
+#
+# folder = r'/fs/pool/pool-schwille-user/Qutbuddin_Yusuf/_Protocols/RICS_fit/Sample_Data/Simulations/Sim_2_90'
+# file_extension = '.tif' # or '.czi'
+# ending_word = 'RICScorr'
+# save_path = os.path.join(folder, 'Results')
+#
+# PSF_size_xy = 0.2
+# PSF_aspect_ratio = 4.985423166
+# crop_factor_fast_ax = 0.5
+# crop_factor_slow_ax = 0.5
+# file_for_metadata = ''
+#
+# if file_for_metadata:
+#     metadata_path = os.path.join(folder, file_for_metadata)
+#     with pyczi.open_czi(metadata_path) as czidoc:
+#         Pixel_size_nm, Pixel_dwell_time_us, line_time_ms = im.get_metadata(czidoc)
+#
+# else:
+#
+#     # Parameters
+#     Pixel_size_nm = 20 #nm
+#     Pixel_dwell_time_us = 50 #us
+#     line_time_ms = 12.8#ms
+#
+#
+# # Models
+# # diffusion_model = '3Ddiff'
+# diffusion_model = '2Ddiff'
+#
+#
+# # paramnter rescaling
+# pixel_size_um = Pixel_size_nm * 1e-3
+# psf_size_xy_um = PSF_size_xy
+# psf_aspect_ratio = PSF_aspect_ratio
+# pixel_time_s = Pixel_dwell_time_us * 1e-6
+# line_time_s = line_time_ms * 1e-3
+#
 
 
 # Classes

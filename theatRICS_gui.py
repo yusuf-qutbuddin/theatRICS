@@ -9,6 +9,8 @@ Modular RICS Analysis GUI Application
 Imports existing RICS modules and provides a unified interface
 """
 import os
+
+
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1" 
 os.environ["NUMEXPR_NUM_THREADS"] = "1" 
@@ -20,25 +22,28 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
-import matplotlib.pyplot as plt 
+from scipy.ndimage import gaussian_filter1d
+
+# import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('agg')
-
-import tifffile
 from pylibCZIrw import czi as pyczi
 import multiprocessing
+from multiprocessing.pool import ThreadPool as Pool
 import threading
 from threading import Thread
 import queue
 import tifffile
 from tqdm import tqdm
 import scipy.ndimage
-from concurrent.futures import ProcessPoolExecutor, as_completed
+# from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import simRICS
 import export_rics
 import rics_fit
-import random
+import SFCS_module
+
+# import random
 import pandas as pd
 # Import your existing modules
 
@@ -74,11 +79,13 @@ class ModularRICSGUI:
         error_frame.pack(fill='both', expand=True, padx=20, pady=20)
 
         error_label = ttk.Label(error_frame, 
-                               text="Error: Could not load RICS modules!\n\n"
+                               text="Error: Could not load modules!\n\n"
                                     "Please ensure the following files are in the same directory:\n"
                                     "• simRICS.py\n"
                                     "• export_rics.py\n"  
                                     "• rics_fit.py\n\n"
+                                    "• SFCS_module.py\n\n"
+                                    
                                     "Then restart the application.",
                                font=('Arial', 12),
                                foreground='red',
@@ -100,6 +107,7 @@ class ModularRICSGUI:
         self.create_simulation_tab()
         self.create_rics_export_tab()  
         self.create_fitting_tab()
+        self.create_SFCS_tab()
         self.create_results_tab()
 
 
@@ -309,7 +317,62 @@ class ModularRICSGUI:
         rics_toolbar = NavigationToolbar2Tk(self.rics_canvas, rics_display_frame)
         rics_toolbar.update()
 
-        
+    def create_SFCS_tab(self):
+        """Create the SFCS tab using SFCS module"""
+        SFCS_frame = ttk.Frame(self.notebook)
+        self.notebook.add(SFCS_frame, text="SFCS")
+
+        # Parameters frame
+        SFCS_params = ttk.LabelFrame(SFCS_frame, text="SFCS Parameters", padding=10)
+        SFCS_params.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        # Configure grid weights for proper expansion
+        SFCS_params.grid_columnconfigure(1, weight=1)
+
+        row = 0
+
+        # Input file
+        ttk.Label(SFCS_params, text="Input file:").grid(row=row, column=0, sticky='w', pady=2)
+        input_frame = ttk.Frame(SFCS_params)  # Renamed to avoid name conflict
+        input_frame.grid(row=row, column=1, columnspan=2, pady=2, sticky='ew')
+        self.input_file = tk.StringVar()
+        ttk.Entry(input_frame, textvariable=self.input_file, width=25).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(input_frame, text="Browse", command=self.browse_input_file).pack(side=tk.RIGHT)
+
+        row += 1
+        ttk.Label(SFCS_params, text="Channel to use:").grid(row=row, column=0, sticky='w', pady=2)
+        channel_frame = ttk.Frame(SFCS_params)  # Fixed: Use correct parent
+        channel_frame.grid(row=row, column=1, columnspan=2, pady=2, sticky='ew')
+        self.channel = tk.StringVar(value="0")
+        model_combo = ttk.Combobox(channel_frame, textvariable=self.channel,  # Fixed parent
+                                   values=["0", "1"], width=12)  # String values for Combobox
+        model_combo.pack(side=tk.LEFT)  # Fixed: proper packing
+
+        row += 1
+        ttk.Label(SFCS_params, text="Number of cores").grid(row=row, column=0, sticky='w', pady=2)
+        cpu_frame = ttk.Frame(SFCS_params)  # Fixed: Use correct parent
+        cpu_frame.grid(row=row, column=1, columnspan=2, pady=2, sticky='ew')
+        self.n_cpu = tk.StringVar(value="4")
+        ttk.Entry(cpu_frame, textvariable=self.n_cpu, width=15).pack(side=tk.LEFT)  # Fixed parent
+
+        # Buttons
+        row += 1
+        SFCS_button_frame = ttk.Frame(SFCS_params)
+        SFCS_button_frame.grid(row=row, column=0, columnspan=2, pady=10)
+        ttk.Button(SFCS_button_frame, text="Correlate", command=self.run_SFCS).pack(side=tk.LEFT, padx=5)
+
+        # Display frame for SFCS
+        SFCS_display_frame = ttk.LabelFrame(SFCS_frame, text="SFCS curves")
+        SFCS_display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Matplotlib figure for SFCS display
+        self.SFCS_fig = Figure(figsize=(6, 6), dpi=100, facecolor='none')  # Changed to 'none' for better theming
+        self.SFCS_canvas = FigureCanvasTkAgg(self.SFCS_fig, SFCS_display_frame)
+        self.SFCS_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Navigation toolbar
+        SFCS_toolbar = NavigationToolbar2Tk(self.SFCS_canvas, SFCS_display_frame)
+        SFCS_toolbar.update()
 
     def browse_metadata_file(self):
         filename = filedialog.askopenfilename(
@@ -657,6 +720,10 @@ class ModularRICSGUI:
         print(f"Saved parallel simulated raster scan to {output_path}")
         return stack
 
+
+
+
+
     def parallel_rics_raster_aniso_rotated(
         self,
         img_shape,
@@ -730,6 +797,7 @@ class ModularRICSGUI:
         tifffile.imwrite(output_path, stack, photometric='minisblack')
         print(f"Saved parallel simulated raster scan to {output_path}")
         return stack
+
     def run_simulation(self):
         """Run image simulation using simRICS module"""
         if not simRICS:
@@ -847,12 +915,97 @@ class ModularRICSGUI:
                     pass
 
         threading.Thread(target=poll_queue, daemon=True).start()
-        
 
-        
+    def parallel_gaussian_fitting(self, frame_data, x, n_pixels, n_lines, root, cpu_n):
+        results = []
 
-  
-                
+        args_list = [(i, frame_data[i], x, n_pixels) for i in range(n_lines)]
+        pool = Pool(processes=cpu_n)
+
+        j = 0
+        self.log_message("Fitting gaussians on each line...")
+        for result in tqdm(pool.imap(SFCS_module.fit_gaussian_line, args_list),total = n_lines):
+            results.append(result)
+
+            j += 1
+            progress = (j / n_lines) * 100
+            self.progress_queue.put(progress)
+        pool.close()
+        pool.join()
+        # for args in args_list:
+        #     result = SFCS_module.fit_gaussian_line(args)
+        #     results.append(result)
+        # Unpack results (maintain original order)
+        peaks = np.full(n_lines, 0.0)
+        sigmas = np.full(n_lines, 5.0)
+        for i, peak, sigma in results:
+            peaks[i] = peak
+            sigmas[i] = sigma
+        return peaks, sigmas
+    def run_SFCS(self):
+        """Run correlation using SFCS module"""
+        if not SFCS_module:
+            messagebox.showerror("Error", "SFCS module not loaded!")
+            return
+
+        self.log_message("Starting correlation...")
+        self.status_var.set("Running correlation...")
+        # Show progress bar at simulation start
+        self.status_bar.update_idletasks()  # Force redraw
+
+        self.progress_queue = multiprocessing.Queue()
+        frame_data, line_time_s, x, n_lines, n_pixels, root = SFCS_module.read_file(str(self.input_file.get()), int(self.channel.get()))
+        # self.progress_queue.put_nowait(0)
+        # print(self.progress_queue.get_nowait())
+        def worker():
+            try:
+                # print("Inside simulation worker")  # Confirm worker start
+                n_cpu = int(self.n_cpu.get())
+                if n_cpu >= multiprocessing.cpu_count():
+                    n_cpu = int(0.8 * int(multiprocessing.cpu_count()))
+                else:
+                    pass
+                peaks, sigmas = self.parallel_gaussian_fitting(frame_data, x, n_pixels, n_lines, root, n_cpu)
+                aligned_data = SFCS_module.alignment(frame_data, n_pixels, n_lines, root, peaks)
+                intensity_traces = SFCS_module.calculate_intensity_trace(aligned_data, n_lines, n_pixels, sigmas, root)
+                G, G_std = SFCS_module.run_autocorrelation(intensity_traces, line_time_s, root)
+                self.frame_data = frame_data
+                self.aligned_data = aligned_data
+                self.intensity_traces = intensity_traces
+                self.G = G
+                # print("Simulation worker finished successfully")
+                self.root.after(0, self.update_SFCS_display)
+                self.root.after(0, lambda: self.status_var.set("Correlation completed"))
+                self.root.after(0, lambda: self.log_message("Correlation completed"))
+                self.root.after(0, lambda: self.progress_bar.pack_forget())
+                self.status_bar.update_idletasks()
+
+            except Exception as e:
+                import traceback
+                self.log_message(f"Exception in simulation worker: {str(e)}")
+                self.log_message(traceback.format_exc())
+                self.root.after(0, lambda: self.status_var.set("Error"))
+                self.root.after(0, lambda: self.progress_bar.pack_forget())  # Hide progress bar on error
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        # Start polling the progress queue in a separate thread to keep GUI responsive
+        def poll_queue():
+            progress = 0
+            while progress <= 100:
+                try:
+                    progress = self.progress_queue.get(block=False)
+                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                    self.root.after(0, lambda: self.progress_bar.update_idletasks())
+                    if progress == 100:
+                        self.root.after(0, lambda: self.progress_bar.pack_forget())
+                        self.root.after(0, lambda: self.progress_bar.update_idletasks())
+                        break
+                except:
+                    pass
+
+        threading.Thread(target=poll_queue, daemon=True).start()
+
     def update_simulation_display(self):
         """Update the simulation display with multiple views"""
         if self.simulated_stack is not None:
@@ -910,6 +1063,96 @@ class ModularRICSGUI:
 
             self.sim_canvas.draw()
 
+    def update_SFCS_display(self):
+        """Update the SFCS display with multiple views: original, aligned, intensity, and correlation"""
+        if hasattr(self, 'frame_data') and self.frame_data is not None:
+            self.SFCS_fig.clear()
+
+            # Create subplots: 2x2 grid
+            gs = gridspec.GridSpec(2, 2, figure=self.SFCS_fig, hspace=0.3, wspace=0.3)
+
+            # 1. Original frame data - cropped to 100 lines (y-axis)
+            ax1 = self.SFCS_fig.add_subplot(gs[0, 0])
+            if self.frame_data.ndim == 3:  # (time, y, x)
+                ny = self.frame_data.shape[1]
+                crop_start = max(0, (ny - 100) // 2)
+                crop_end = min(ny, crop_start + 100)
+                cropped_original = self.frame_data[0, crop_start:crop_end, :]
+            else:  # 2D case
+                ny = self.frame_data.shape[0]
+                crop_start = max(0, (ny - 100) // 2)
+                crop_end = min(ny, crop_start + 100)
+                cropped_original = self.frame_data[crop_start:crop_end, :]
+
+            im1 = ax1.imshow(cropped_original, cmap='gray')
+            ax1.set_title('Original Frame (100 lines crop)')
+            ax1.axis('off')
+            self.SFCS_fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+
+            # 2. Aligned data - cropped to 100 lines
+            ax2 = self.SFCS_fig.add_subplot(gs[0, 1])
+            if hasattr(self, 'aligned_data') and self.aligned_data is not None:
+                if self.aligned_data.ndim == 3:
+                    ny = self.aligned_data.shape[1]
+                    crop_start = max(0, (ny - 100) // 2)
+                    crop_end = min(ny, crop_start + 100)
+                    cropped_aligned = self.aligned_data[0, crop_start:crop_end, :]
+                else:
+                    ny = self.aligned_data.shape[0]
+                    crop_start = max(0, (ny - 100) // 2)
+                    crop_end = min(ny, crop_start + 100)
+                    cropped_aligned = self.aligned_data[crop_start:crop_end, :]
+
+                im2 = ax2.imshow(cropped_aligned, cmap='gray')
+                ax2.set_title('Aligned Frame (100 lines crop)')
+                ax2.axis('off')
+                self.SFCS_fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+            else:
+                ax2.text(0.5, 0.5, 'No aligned data', ha='center', va='center', transform=ax2.transAxes)
+                ax2.set_title('Aligned Frame')
+                ax2.axis('off')
+
+            # 3. Intensity trace from central crop region
+            ax3 = self.SFCS_fig.add_subplot(gs[1, 0])
+            intensity_traces = self.intensity_traces
+
+            ax3.plot(intensity_traces, 'b-', linewidth=1.5)
+            ax3.set_title('Average Intensity vs Frame')
+            ax3.set_xlabel('Frame')
+            ax3.set_ylabel('Intensity')
+            ax3.grid(True, alpha=0.3)
+
+            # 4. SFCS Correlation curve - updated plotting style
+            ax4 = self.SFCS_fig.add_subplot(gs[1, 1])
+            if hasattr(self, 'G') and self.G is not None:
+                if hasattr(self, 'G_std') and self.G_std is not None:
+                    # Main correlation curve with uncertainty band
+                    ax4.semilogx(self.G[:, 0], self.G[:, 1], 'k-', linewidth=2, label='G(τ)')
+                    ax4.fill_between(self.G[:, 0],
+                                     self.G[:, 1] - self.G_std,
+                                     self.G[:, 1] + self.G_std,
+                                     alpha=0.3, color='gray', label='±1σ (Wohland)')
+                    ax4.set_xlabel('Lag time (s)')
+                    ax4.set_ylabel('G(τ)')
+                    ax4.set_title('SFCS Autocorrelation')
+                    ax4.grid(True, alpha=0.3)
+                    ax4.legend()
+                else:
+                    # Just the main curve if no std available
+                    ax4.semilogx(self.G[:, 0], self.G[:, 1], 'k-', linewidth=2, label='G(τ)')
+                    ax4.set_xlabel('Lag time (s)')
+                    ax4.set_ylabel('G(τ)')
+                    ax4.set_title('SFCS Autocorrelation')
+                    ax4.grid(True, alpha=0.3)
+                    ax4.legend()
+            else:
+                ax4.text(0.5, 0.5, 'No correlation data', ha='center', va='center', transform=ax4.transAxes)
+                ax4.set_title('SFCS Correlation')
+
+            self.SFCS_canvas.draw()
+            root, ext = os.path.splitext(str(self.input_file.get()))
+            self.SFCS_fig.savefig(root+"_correlation.svg",dpi=300, bbox_inches='tight', facecolor='white')
+    
     def load_simulation(self):
         """Load existing simulation"""
         filename = filedialog.askopenfilename(
