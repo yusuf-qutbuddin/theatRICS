@@ -3,7 +3,7 @@ import multiprocessing as mp
 import traceback
 from modules import SFCS_module
 
-def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,
+def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,cancel_event,
                                chunk_lines=500, max_workers=None):
     """
     Whole SFCS pipeline in a separate process.
@@ -13,7 +13,9 @@ def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,
     """
     try:
         out_q.put(("progress", 0.0))
-
+        if cancel_event.is_set():
+            out_q.put(("cancelled", None))
+            return
         frame_data, line_time_s, x, n_lines, n_pixels, root = SFCS_module.read_file(str(input_file), int(channel))
         out_q.put(("progress", 2.0))
 
@@ -46,10 +48,15 @@ def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,
         # ---- parallel chunk fitting ----
         # chunksize=1 here because "tasks" are already chunky
         with mp.Pool(processes=cpu_n) as pool:
-            
+
             completed_lines = 0
             for chunk_result in pool.imap(SFCS_module.fit_gaussian_chunk, tasks, chunksize=1):
                 # chunk_result is list of (i, peak, sigma)
+                if cancel_event.is_set():
+                    pool.terminate()
+                    pool.join()
+                    out_q.put(("cancelled", None))
+                    return
                 for (i, peak, sigma) in chunk_result:
                     peaks[i] = peak
                     sigmas[i] = sigma
@@ -59,15 +66,22 @@ def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,
                 out_q.put(("progress", pct))
 
         # ---- Remaining SFCS steps ----
+        if cancel_event.is_set():
+            out_q.put(("cancelled", None))
+            return
         out_q.put(("progress", 65.0))
         aligned_data = SFCS_module.alignment(frame_data, n_pixels, n_lines, root, peaks)
-
+        if cancel_event.is_set():
+            out_q.put(("cancelled", None))
+            return
         out_q.put(("progress", 75.0))
         intensity_traces = SFCS_module.calculate_intensity_trace(aligned_data, n_lines, n_pixels, sigmas, root)
-
+        if cancel_event.is_set():
+            out_q.put(("cancelled", None))
+            return
         out_q.put(("progress", 90.0))
         G, G_std = SFCS_module.run_autocorrelation(intensity_traces, line_time_s, root)
-
+        
         out_q.put(("progress", 100.0))
         out_q.put(("done", dict(
             frame_data=frame_data,

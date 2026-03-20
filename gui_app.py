@@ -697,7 +697,8 @@ class ModularRICSGUI:
             params["rotation_deg"] = float(self.rotation.get())
 
         self.sim_queue = multiprocessing.Queue()
-        
+        self.sim_cancel_event = multiprocessing.Event()
+
         self.sim_proc = multiprocessing.Process(
             target=simulate_rics_process_main,
             args=(params, self.sim_queue, self.sim_cancel_event),
@@ -714,7 +715,12 @@ class ModularRICSGUI:
                     self.set_ui_busy(True)
                     self.progress_var.set(float(payload))
                     self.root.update_idletasks()
-
+                elif msg_type == "cancelled":
+                    self.log_message("sim cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
                 elif msg_type == "done":
                     self.set_ui_busy(False)
                     out_path = payload["output_path"]
@@ -832,7 +838,12 @@ class ModularRICSGUI:
                     self.set_ui_busy(True)
                     self.progress_var.set(float(payload))
                     self.root.update_idletasks()
-
+                elif msg_type == "cancelled":
+                    self.log_message("SFCS cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
                 elif msg_type == "done":
                     self.frame_data = payload["frame_data"]
                     self.aligned_data = payload["aligned_data"]
@@ -886,11 +897,12 @@ class ModularRICSGUI:
 
         self.sfcs_queue = multiprocessing.Queue()
         
+        self.sfcs_cancel_event = multiprocessing.Event()
 
         # non-daemon is REQUIRED because worker will create a Pool
         self.sfcs_proc = multiprocessing.Process(
             target=sfcs_process_main_curvefit,
-            args=(self.sfcs_input_file.get(), int(self.sfcs_channel.get()), cpu_n, self.sfcs_queue),
+            args=(self.sfcs_input_file.get(), int(self.sfcs_channel.get()), cpu_n, self.sfcs_queue, self.sfcs_cancel_event),
             kwargs=dict(chunk_lines=500, max_workers=64),  # tune these
             daemon=False
         )
@@ -1000,7 +1012,12 @@ class ModularRICSGUI:
                     self.set_ui_busy(True)
                     self.progress_var.set(float(payload))
                     self.root.update_idletasks()
-
+                elif msg_type == "cancelled":
+                    self.log_message("export cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
                 elif msg_type == "done":
                     self.set_ui_busy(False)
                     rics_path = payload["rics_output"]
@@ -1077,11 +1094,12 @@ class ModularRICSGUI:
         )
 
         self.export_queue = multiprocessing.Queue()
-        
+        self.export_cancel_event = multiprocessing.Event()
+
 
         self.export_proc = multiprocessing.Process(
             target=export_rics_process_main,
-            args=(params, self.export_queue),
+            args=(params, self.export_queue, self.export_cancel_event),
             daemon=False
         )
         self.export_proc.start()
@@ -1103,6 +1121,12 @@ class ModularRICSGUI:
                     self.progress_var.set(overall)
                     self.root.update_idletasks()
 
+                elif msg_type == "cancelled":
+                    self.log_message("export cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
                 elif msg_type == "done":
                     self.set_ui_busy(False)
                     self.log_message(f"Saved: {payload['rics_output']}")
@@ -1167,10 +1191,10 @@ class ModularRICSGUI:
         )
 
         self.export_queue = multiprocessing.Queue()
-        
+        self.export_cancel_event = multiprocessing.Event()
         self.export_proc = multiprocessing.Process(
             target=export_rics_process_main,
-            args=(params, self.export_queue),
+            args=(params, self.export_queue,self.export_cancel_event),
             daemon=False
         )
         self.export_proc.start()
@@ -1320,10 +1344,11 @@ class ModularRICSGUI:
 
         self.fit_queue = multiprocessing.Queue()
         
+        self.fit_cancel_event = multiprocessing.Event()
 
         self.fit_proc = multiprocessing.Process(
             target=fit_rics_process_main,
-            args=(params, self.fit_queue),
+            args=(params, self.fit_queue, self.fit_cancel_event),
             daemon=False
         )
         self.fit_proc.start()
@@ -1338,7 +1363,12 @@ class ModularRICSGUI:
                     self.set_ui_busy(True)
                     self.progress_var.set(float(payload))
                     self.root.update_idletasks()
-
+                elif msg_type == "cancelled":
+                    self.log_message("fit cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
                 elif msg_type == "file_start":
                     self.set_ui_busy(True)
                     self.log_message(f"Fitting {payload['index']}/{payload['total']}: {payload['file']}")
@@ -1640,7 +1670,8 @@ class ModularRICSGUI:
         )
 
         self.diffmap_queue = multiprocessing.Queue()
-        
+        self.diffmap_cancel_event = multiprocessing.Event()
+
         self.diffmap_proc = multiprocessing.Process(
             target=diffusion_map_process_main,
             args=(params, self.diffmap_queue, self.diffmap_cancel_event),
@@ -1659,7 +1690,12 @@ class ModularRICSGUI:
                     self.progress_var.set(float(payload))
                     self.root.update_idletasks()
 
-
+                elif msg_type == "cancelled":
+                    self.log_message("diffmap cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
                 elif msg_type == "done":
                     self.log_message(f"Diffusion map saved: {payload['diff_map_output']}")
 
@@ -1859,32 +1895,86 @@ class ModularRICSGUI:
                 messagebox.showerror("Error", f"Could not export plots: {str(e)}")
 
     def cancel_current_task(self):
-        """Terminate any running worker process and reset UI."""
-        cancelled_any = False
-        self.set_ui_busy(False)
         self._cleanup_mp()
-        for attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc"):
-            p = getattr(self, attr, None)
+        """
+        Graceful cancel:
+          1) signal cancel events (if present)
+          2) wait briefly for processes to exit cleanly
+          3) hard-terminate only if they don't stop
+          4) close queues + reset UI
+        """
+        cancelled_any = False
+
+        # 1) Signal cancellation (only works if your workers check cancel_event)
+        for ev_attr in (
+            "sfcs_cancel_event",
+            "export_cancel_event",
+            "fit_cancel_event",
+            "sim_cancel_event",
+            "diffmap_cancel_event",
+        ):
+            ev = getattr(self, ev_attr, None)
             try:
-                if p is not None and p.is_alive():
-                    p.terminate()
-                    p.join(timeout=2)
+                if ev is not None:
+                    ev.set()
                     cancelled_any = True
             except Exception:
                 pass
+
+        # Helper to stop one process gracefully, then force if needed
+        def _stop_proc(proc_attr, grace_s=2.0, kill_s=2.0):
+            nonlocal cancelled_any
+            p = getattr(self, proc_attr, None)
+            if p is None:
+                return
+            try:
+                if p.is_alive():
+                    cancelled_any = True
+                    # 2) Grace period
+                    p.join(timeout=grace_s)
+                    # 3) Force kill if still alive
+                    if p.is_alive():
+                        p.terminate()
+                        p.join(timeout=kill_s)
+            except Exception:
+                pass
             finally:
-                setattr(self, attr, None)
-        
-        # Optional: also clear queues (not strictly required)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue"):
+                setattr(self, proc_attr, None)
+
+        # 2–3) Stop any known worker processes
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc"):
+            _stop_proc(proc_attr)
+
+        # 4) Close queues properly (prevents resource_tracker semaphore warnings)
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue"):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
                     q.close()
+                    q.join_thread()
             except Exception:
                 pass
             finally:
                 setattr(self, qattr, None)
+
+        # Clear cancel events (optional)
+        for ev_attr in (
+            "sfcs_cancel_event",
+            "export_cancel_event",
+            "fit_cancel_event",
+            "sim_cancel_event",
+            "diffmap_cancel_event",
+        ):
+            setattr(self, ev_attr, None)
+
+        # Reset UI
+        self.progress_var.set(0.0)
+        try:
+            self.progress_bar.grid_remove()
+        except Exception:
+            pass
+
+        self.set_ui_busy(False)
 
         if cancelled_any:
             self.log_message("Cancelled running task.")
@@ -1892,13 +1982,6 @@ class ModularRICSGUI:
         else:
             self.log_message("No running task to cancel.")
             self.status_var.set("Ready")
-
-        # Reset progress bar
-        self.progress_var.set(0.0)
-        try:
-            self.progress_bar.grid_remove()
-        except Exception:
-            pass
 
     def register_busy_widget(self, w):
         """Register a widget to be disabled while a task is running."""
@@ -1952,6 +2035,7 @@ class ModularRICSGUI:
 
     def shutdown(self):
         self._cleanup_mp()
+        
 
 
 
