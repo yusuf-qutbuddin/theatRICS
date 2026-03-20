@@ -1,7 +1,7 @@
 import multiprocessing as mp
 import tkinter as tk
-from gui_app import ModularRICSGUI
-from utils.mp_utils import set_single_threaded_blas, setup_multiprocessing
+from theatrics.gui_app import ModularRICSGUI
+from theatrics.utils.mp_utils import set_single_threaded_blas, setup_multiprocessing
 
 
 def main():

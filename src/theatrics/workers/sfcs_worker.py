@@ -1,7 +1,7 @@
 import numpy as np
 import multiprocessing as mp
 import traceback
-from modules import SFCS_module
+from theatrics.modules import SFCS_module
 
 def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,cancel_event,
                                chunk_lines=500, max_workers=None):

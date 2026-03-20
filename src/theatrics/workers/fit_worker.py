@@ -5,8 +5,8 @@ import pandas as pd
 import tifffile
 import traceback
 
-from modules import rics_fit
-from modules import inspect_metadata as im
+from theatrics.modules import rics_fit
+from theatrics.modules import inspect_metadata as im
 from pylibCZIrw import czi as pyczi
 
 

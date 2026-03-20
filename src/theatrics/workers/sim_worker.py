@@ -4,7 +4,7 @@ import numpy as np
 import multiprocessing as mp
 import tifffile
 import traceback
-from modules import simRICS
+from theatrics.modules import simRICS
 
 
 def _dispatch_worker(sim_type: str):

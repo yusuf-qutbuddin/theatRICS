@@ -7,9 +7,9 @@ import traceback
 import scipy.ndimage
 
 from pylibCZIrw import czi as pyczi
-from modules import inspect_metadata as im
-from modules import export_rics
-from modules import rics_fit
+from theatrics.modules import inspect_metadata as im
+from theatrics.modules import export_rics
+from theatrics.modules import rics_fit
 
 
 def _process_block_diff_map(args):

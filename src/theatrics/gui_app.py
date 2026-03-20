@@ -27,14 +27,14 @@ import tifffile
 import scipy.ndimage
 import json
 import pandas as pd
-from workers.sfcs_worker import sfcs_process_main_curvefit
-from workers.export_worker import export_rics_process_main
-from workers.fit_worker import fit_rics_process_main
-from workers.sim_worker import simulate_rics_process_main
-from workers.diffmap_worker import diffusion_map_process_main
+from theatrics.workers.sfcs_worker import sfcs_process_main_curvefit
+from theatrics.workers.export_worker import export_rics_process_main
+from theatrics.workers.fit_worker import fit_rics_process_main
+from theatrics.workers.sim_worker import simulate_rics_process_main
+from theatrics.workers.diffmap_worker import diffusion_map_process_main
 
-from utils.file_utils import get_files_from_folder
-from utils.mp_utils import clamp_workers
+from theatrics.utils.file_utils import get_files_from_folder
+from theatrics.utils.mp_utils import clamp_workers
 
 
 

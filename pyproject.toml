@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "theatrics"
+version = "1.0.1"
+description = "GUI for RICS and SFCS analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name="Yusuf Qutbuddin", email="yusuf.qutbuddin@gmail.com"}]
+
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "pandas",
+  "tifffile",
+  "tqdm",
+  "multipletau",
+  "sv-ttk",
+  "pylibCZIrw",
+  "scikit-image",
+  "lmfit",
+  # plus any others you use (lmfit, etc.)
+]
+
+[project.scripts]
+theatrics = "theatrics.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

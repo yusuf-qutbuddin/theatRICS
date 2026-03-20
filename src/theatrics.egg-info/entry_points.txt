@@ -1,0 +1,2 @@
+[console_scripts]
+theatrics = theatrics.main:main

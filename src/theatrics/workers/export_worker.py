@@ -2,7 +2,7 @@ import os
 import numpy as np
 import tifffile
 import traceback
-from modules import export_rics
+from theatrics.modules import export_rics
 
 from pylibCZIrw import czi as pyczi
 
