@@ -6,13 +6,16 @@ from modules import export_rics
 
 from pylibCZIrw import czi as pyczi
 
-def export_rics_process_main(params, out_q):
+def export_rics_process_main(params, out_q,cancel_event):
     """
     params keys:
       input_file, channel, crop_factor, window_size, correct_drift
     """
     try:
         out_q.put(("progress", 0.0))
+        if cancel_event.is_set():
+            out_q.put(("cancelled", None))
+            return
         input_file = params["input_file"]
         channel = int(params["channel"])
         crop_factor = float(params["crop_factor"])
@@ -27,7 +30,9 @@ def export_rics_process_main(params, out_q):
             with pyczi.open_czi(input_file) as czidoc:
                 n_frames = czidoc.total_bounding_box["T"][1]
             out_q.put(("progress", 10.0))
-
+            if cancel_event.is_set():
+                    out_q.put(("cancelled", None))
+                    return
             RICS_map, sd_map, all_frames, corrected_stack = export_rics.process_all_frames_czi(
                 input_file, n_frames, channel, window_size, crop_factor, correct_drift
             )
@@ -45,6 +50,9 @@ def export_rics_process_main(params, out_q):
         else:
             raise ValueError(f"Unsupported file: {ext}")
 
+        if cancel_event.is_set():
+                    out_q.put(("cancelled", None))
+                    return
         out_q.put(("progress", 90.0))
 
         rics_output = os.path.splitext(input_file)[0] + "_RICScorr.tif"
@@ -55,6 +63,9 @@ def export_rics_process_main(params, out_q):
         corrected_tiff_output = os.path.splitext(input_file)[0] + "_corrected_TIFF.tif"                                    
         tifffile.imwrite(corrected_tiff_output, corrected_stack[0],photometric="minisblack")
         tifffile.imwrite(tiff_output, all_frames[0],photometric="minisblack")
+        if cancel_event.is_set():
+                    out_q.put(("cancelled", None))
+                    return
         out_q.put(("progress", 100.0))
         out_q.put(("done", {
             "rics_output": rics_output,

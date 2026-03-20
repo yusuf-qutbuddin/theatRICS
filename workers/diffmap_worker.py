@@ -72,8 +72,10 @@ def diffusion_map_process_main(params, out_q, cancel_event=None):
       cpu_n (optional)
     """
     try:
-        if cancel_event is None:
-            cancel_event = mp.Event()
+        if cancel_event.is_set():
+                    
+                    out_q.put(("cancelled", None))
+                    return
 
         out_q.put(("progress", 0.0))
 
@@ -95,7 +97,10 @@ def diffusion_map_process_main(params, out_q, cancel_event=None):
         pixelsize_um = float(Pixel_size_nm) * 1e-3
         pixeltime_s = float(Pixel_dwell_time_us) * 1e-6
         linetime_s = float(line_time_ms) * 1e-3
-
+        if cancel_event.is_set():
+                    
+                    out_q.put(("cancelled", None))
+                    return
         out_q.put(("progress", 5.0))
 
         # ---- read frames to stack ----

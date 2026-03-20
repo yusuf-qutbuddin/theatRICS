@@ -1,0 +1,12 @@
+sim_type: isotropic
+img_shape: (256, 256)
+n_frames: 25
+pixel_dwell_time_us: 50.0
+pixel_size_nm: 20.0
+brightness_khz: 2000.0
+n_particles: 250
+background: 0.0
+psf_sigma_px: 5.0
+output_path: ./simulation_output.tif
+cpu_n: 4
+diffusion_um2_s: 10.0

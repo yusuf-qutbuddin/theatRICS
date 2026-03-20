@@ -152,7 +152,7 @@ def fit_rics_one_file(params, out_q=None):
     return summary, npz_path
 
 
-def fit_rics_process_main(params, out_q):
+def fit_rics_process_main(params, out_q, cancel_event):
     """
     Worker entry point.
     Supports single file OR batch (list of rics files).
@@ -164,12 +164,19 @@ def fit_rics_process_main(params, out_q):
     """
     try:
         out_q.put(("progress", 0.0))
-
+        if cancel_event.is_set():
+                    
+                    out_q.put(("cancelled", None))
+                    return
         mode = params.get("mode", "single")
 
         if mode == "single":
             out_q.put(("progress", 5.0))
             summary, npz_path = fit_rics_one_file(params)
+            if cancel_event.is_set():
+                    
+                    out_q.put(("cancelled", None))
+                    return
             out_q.put(("progress", 100.0))
             out_q.put(("done", {"summary": summary, "npz_path": npz_path}))
             return
@@ -185,11 +192,17 @@ def fit_rics_process_main(params, out_q):
             p = dict(params)
             p["rics_file"] = f
             p["mode"] = "single"
-
+            if cancel_event.is_set():
+                
+                    out_q.put(("cancelled", None))
+                    return
             out_q.put(("file_start", {"index": k, "total": n, "file": f}))
             summary, npz_path = fit_rics_one_file(p)
             out_q.put(("file_done", {"summary": summary, "npz_path": npz_path}))
-
+            if cancel_event.is_set():
+                    
+                    out_q.put(("cancelled", None))
+                    return
             out_q.put(("progress", 100.0 * k / n))
 
         out_q.put(("done", {"n_total": n}))

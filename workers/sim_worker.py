@@ -36,8 +36,7 @@ def simulate_rics_process_main(params, out_q, cancel_event=None):
       cpu_n: int
     """
     try:
-        if cancel_event is None:
-            cancel_event = mp.Event()
+        
 
         out_q.put(("progress", 0.0))
 
@@ -111,14 +110,15 @@ def simulate_rics_process_main(params, out_q, cancel_event=None):
         with mp.Pool(processes=cpu_n) as pool:
             for i, frame in enumerate(pool.imap(worker_fn, frame_args, chunksize=1), start=1):
 
+                
+
+                stack.append(frame)
+                out_q.put(("progress", 2.0 + 96.0 * (i / n_frames)))
                 if cancel_event.is_set():
                     pool.terminate()
                     pool.join()
                     out_q.put(("cancelled", None))
                     return
-
-                stack.append(frame)
-                out_q.put(("progress", 2.0 + 96.0 * (i / n_frames)))
 
         stack = np.stack(stack, axis=0)
         tifffile.imwrite(output_path, stack, photometric="minisblack")
