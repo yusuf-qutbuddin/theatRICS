@@ -11,26 +11,25 @@ import numpy as np
 import multiprocessing
 import tifffile
 import matplotlib.pyplot as plt
-# from scipy.signal import windows
 import matplotlib.gridspec as gridspec
 import scipy.fftpack as fftpack
 from scipy.ndimage import gaussian_filter
 from scipy.signal import fftconvolve
 
-# File
+# # File
 
-folder = r''
-file_extension = '.tif' # or '.czi'
-ending_word = ''
+# folder = r''
+# file_extension = '.tif' # or '.czi'
+# ending_word = ''
 
-# Parameters
-channel_to_use = 0
-crop_factor = 0.5 # creates a square roi in the centre with this crop factor prints the size of the ROI
-window_size = 3 # WIndow size for moving average correction (has to be an odd number)
-parallel_processing = False
-num_workers = 256
-correct_drift = False
-#%% Functions
+# # Parameters
+# channel_to_use = 0
+# crop_factor = 0.5 # creates a square roi in the centre with this crop factor prints the size of the ROI
+# window_size = 3 # WIndow size for moving average correction (has to be an odd number)
+# parallel_processing = False
+# num_workers = 256
+# correct_drift = False
+# #%% Functions
 
 
 def get_files_from_folder(folder_path, extension, suffix):
@@ -162,7 +161,7 @@ def moving_average_correction(image_stack, window_size=3):
 
 def read_frame(filepath, 
                frame, 
-               channel):
+               channel, crop_factor):
     with pyczi.open_czi(filepath) as czidoc:
         total_bounding_rectangle = czidoc.total_bounding_rectangle
         data_frame = czidoc.read(roi = total_bounding_rectangle,
@@ -179,7 +178,7 @@ def process_frame(filepath,
     # Read frame
     image_frame = read_frame(filepath, 
                               frame_to_use, 
-                              channel_to_use)
+                              channel_to_use, crop_factor)
     
     # Get correlation map
     RICS_frame = autocorrelation_map(image_frame)
@@ -214,11 +213,12 @@ def bootstrap_sd(RICS_frames_array,
 def process_all_frames_czi(filepath, 
                        n_frames,
                        channel_to_use,
-                       window_size = 3):
+                       window_size, crop_factor, correct_drift):
    
     all_frames = []
     for i_frame in range(n_frames):
-        frame_data = read_frame(filepath, i_frame, channel_to_use)
+        frame_data = read_frame(filepath, i_frame, channel_to_use, crop_factor)
+    
         all_frames.append(frame_data)
     all_frames = np.stack(all_frames, axis = 0)
     if correct_drift:
@@ -228,8 +228,7 @@ def process_all_frames_czi(filepath,
     # Apply moving average correction
     corrected_stack = moving_average_correction(all_frames, window_size=window_size)
     reduced_frame_count = corrected_stack.shape[0]
-                                                  
-    
+
     # Process autocorrelation map for each corrected frame
     RICS_frames_list = [autocorrelation_map(corrected_stack[i]) for i in range(reduced_frame_count)]
     RICS_frames_array = np.stack(RICS_frames_list, axis=2)  # Now [height, width, reduced_frame_count]                                                                

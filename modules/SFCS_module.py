@@ -31,13 +31,32 @@ def read_frame(filepath,
                                      'C': channel})
     return data_frame, Frame_time_s
 
+def fit_gaussian_chunk(args):
+    """
+    Fit a chunk of lines with curve_fit.
+    args: (i0, block, n_pixels)
+      i0: starting line index in the full frame
+      block: ndarray shape (chunk_lines, n_pixels) uint16/float
+      n_pixels: int
+    returns: list of (i, peak, sigma)
+    """
+    i0, block, n_pixels = args
+    x = np.arange(n_pixels)
+
+    out = []
+    for k in range(block.shape[0]):
+        i = i0 + k
+        line = block[k]
+        out.append(fit_gaussian_line((i, line, x, n_pixels)))
+    return out
+
 def gaussian(x, amp, cen, sigma):
         return amp * np.exp(-(x - cen) ** 2 / (2 * sigma ** 2))
 
 def fit_gaussian_line(args):
-
     """Fitting function for multiprocessing - unpacks (i, line_data, x, n_pixels)"""
     (i, line_data, x, n_pixels) = args
+    
     y = line_data.astype(float)
 
     # Skip empty / almost flat lines

@@ -22,14 +22,14 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
-from scipy.ndimage import gaussian_filter1d
+import traceback
+from multiprocessing.pool import ThreadPool
 
 # import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('agg')
 from pylibCZIrw import czi as pyczi
 import multiprocessing
-from multiprocessing.pool import ThreadPool as Pool
 import threading
 from threading import Thread
 import queue
@@ -46,6 +46,85 @@ import SFCS_module
 # import random
 import pandas as pd
 # Import your existing modules
+
+
+
+def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,
+                               chunk_lines=500, max_workers=None):
+    """
+    Whole SFCS pipeline in a separate process.
+    Gaussian fitting uses curve_fit in parallel via multiprocessing.Pool + chunking.
+
+    out_q messages: ("progress", pct) / ("done", payload) / ("error", tb)
+    """
+    try:
+        out_q.put(("progress", 0.0))
+
+        frame_data, line_time_s, x, n_lines, n_pixels, root = SFCS_module.read_file(str(input_file), int(channel))
+        out_q.put(("progress", 2.0))
+
+        # ---- build chunk tasks ----
+        chunk_lines = int(chunk_lines)
+        if chunk_lines < 50:
+            chunk_lines = 50
+
+        tasks = []
+        for i0 in range(0, n_lines, chunk_lines):
+            block = frame_data[i0:i0 + chunk_lines]          # view
+            tasks.append((i0, block, n_pixels))
+
+        n_tasks = len(tasks)
+
+        peaks = np.full(n_lines, 0.0, dtype=float)
+        sigmas = np.full(n_lines, 5.0, dtype=float)
+
+        # workers: don't blindly use 256; curve_fit overhead + OS overhead matters
+        cpu_n = int(cpu_n)
+        if max_workers is not None:
+            cpu_n = min(cpu_n, int(max_workers))
+        cpu_n = max(1, cpu_n)
+
+        # IMPORTANT on Windows/Linux: do NOT make this SFCS worker process daemonic
+        # (you already fixed that). This pool is created inside this worker process.
+
+        out_q.put(("progress", 5.0))
+
+        # ---- parallel chunk fitting ----
+        # chunksize=1 here because "tasks" are already chunky
+        with multiprocessing.Pool(processes=cpu_n) as pool:
+            completed_lines = 0
+            for chunk_result in pool.imap(SFCS_module.fit_gaussian_chunk, tasks, chunksize=1):
+                # chunk_result is list of (i, peak, sigma)
+                for (i, peak, sigma) in chunk_result:
+                    peaks[i] = peak
+                    sigmas[i] = sigma
+
+                completed_lines += len(chunk_result)
+                pct = 5.0 + 55.0 * (completed_lines / n_lines)   # 5%->60%
+                out_q.put(("progress", pct))
+
+        # ---- Remaining SFCS steps ----
+        out_q.put(("progress", 65.0))
+        aligned_data = SFCS_module.alignment(frame_data, n_pixels, n_lines, root, peaks)
+
+        out_q.put(("progress", 75.0))
+        intensity_traces = SFCS_module.calculate_intensity_trace(aligned_data, n_lines, n_pixels, sigmas, root)
+
+        out_q.put(("progress", 90.0))
+        G, G_std = SFCS_module.run_autocorrelation(intensity_traces, line_time_s, root)
+
+        out_q.put(("progress", 100.0))
+        out_q.put(("done", dict(
+            frame_data=frame_data,
+            aligned_data=aligned_data,
+            intensity_traces=intensity_traces,
+            G=G,
+            G_std=G_std
+        )))
+
+    except Exception:
+        out_q.put(("error", traceback.format_exc()))
+
 
 class ModularRICSGUI:
     def __init__(self, root):
@@ -916,95 +995,73 @@ class ModularRICSGUI:
 
         threading.Thread(target=poll_queue, daemon=True).start()
 
-    def parallel_gaussian_fitting(self, frame_data, x, n_pixels, n_lines, root, cpu_n):
-        results = []
+    def _poll_sfcs_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.sfcs_queue.get_nowait()
 
-        args_list = [(i, frame_data[i], x, n_pixels) for i in range(n_lines)]
-        pool = Pool(processes=cpu_n)
+                if msg_type == "progress":
+                    self.progress_var.set(float(payload))
+                    self.root.update_idletasks()
 
-        j = 0
-        self.log_message("Fitting gaussians on each line...")
-        for result in tqdm(pool.imap(SFCS_module.fit_gaussian_line, args_list),total = n_lines):
-            results.append(result)
+                elif msg_type == "done":
+                    self.frame_data = payload["frame_data"]
+                    self.aligned_data = payload["aligned_data"]
+                    self.intensity_traces = payload["intensity_traces"]
+                    self.G = payload["G"]
+                    self.G_std = payload["G_std"]
 
-            j += 1
-            progress = (j / n_lines) * 100
-            self.progress_queue.put(progress)
-        pool.close()
-        pool.join()
-        # for args in args_list:
-        #     result = SFCS_module.fit_gaussian_line(args)
-        #     results.append(result)
-        # Unpack results (maintain original order)
-        peaks = np.full(n_lines, 0.0)
-        sigmas = np.full(n_lines, 5.0)
-        for i, peak, sigma in results:
-            peaks[i] = peak
-            sigmas[i] = sigma
-        return peaks, sigmas
-    def run_SFCS(self):
-        """Run correlation using SFCS module"""
-        if not SFCS_module:
-            messagebox.showerror("Error", "SFCS module not loaded!")
+                    self.status_var.set("Correlation completed")
+                    self.log_message("Correlation completed")
+                    self.update_SFCS_display()
+                    self.progress_bar.grid_remove()
+                    return
+
+                elif msg_type == "error":
+                    self.status_var.set("Error")
+                    self.log_message(payload)
+                    self.progress_bar.grid_remove()
+                    messagebox.showerror("SFCS Error", "SFCS failed. See log.")
+                    return
+
+        except queue.Empty:
+            pass
+
+        # if process died unexpectedly
+        if self.sfcs_proc is not None and not self.sfcs_proc.is_alive():
+            self.status_var.set("Error")
+            self.log_message("SFCS process terminated unexpectedly.")
+            self.progress_bar.grid_remove()
             return
 
-        self.log_message("Starting correlation...")
+        self.root.after(50, self._poll_sfcs_queue)
+
+    def run_SFCS(self):
+        if not self.input_file.get():
+            messagebox.showwarning("Warning", "Please select an input file first")
+            return
+
+        self.log_message("Starting SFCS (curve_fit + process pool + chunking)...")
         self.status_var.set("Running correlation...")
-        # Show progress bar at simulation start
-        self.status_bar.update_idletasks()  # Force redraw
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()  # since you used grid for it
 
-        self.progress_queue = multiprocessing.Queue()
-        frame_data, line_time_s, x, n_lines, n_pixels, root = SFCS_module.read_file(str(self.input_file.get()), int(self.channel.get()))
-        # self.progress_queue.put_nowait(0)
-        # print(self.progress_queue.get_nowait())
-        def worker():
-            try:
-                # print("Inside simulation worker")  # Confirm worker start
-                n_cpu = int(self.n_cpu.get())
-                if n_cpu >= multiprocessing.cpu_count():
-                    n_cpu = int(0.8 * int(multiprocessing.cpu_count()))
-                else:
-                    pass
-                peaks, sigmas = self.parallel_gaussian_fitting(frame_data, x, n_pixels, n_lines, root, n_cpu)
-                aligned_data = SFCS_module.alignment(frame_data, n_pixels, n_lines, root, peaks)
-                intensity_traces = SFCS_module.calculate_intensity_trace(aligned_data, n_lines, n_pixels, sigmas, root)
-                G, G_std = SFCS_module.run_autocorrelation(intensity_traces, line_time_s, root)
-                self.frame_data = frame_data
-                self.aligned_data = aligned_data
-                self.intensity_traces = intensity_traces
-                self.G = G
-                # print("Simulation worker finished successfully")
-                self.root.after(0, self.update_SFCS_display)
-                self.root.after(0, lambda: self.status_var.set("Correlation completed"))
-                self.root.after(0, lambda: self.log_message("Correlation completed"))
-                self.root.after(0, lambda: self.progress_bar.pack_forget())
-                self.status_bar.update_idletasks()
+        cpu_n = int(self.n_cpu.get())
+        if cpu_n >= multiprocessing.cpu_count():
+            cpu_n = max(1, int(0.8 * multiprocessing.cpu_count()))
 
-            except Exception as e:
-                import traceback
-                self.log_message(f"Exception in simulation worker: {str(e)}")
-                self.log_message(traceback.format_exc())
-                self.root.after(0, lambda: self.status_var.set("Error"))
-                self.root.after(0, lambda: self.progress_bar.pack_forget())  # Hide progress bar on error
+        self.sfcs_queue = multiprocessing.Queue()
 
-        threading.Thread(target=worker, daemon=True).start()
+        # non-daemon is REQUIRED because worker will create a Pool
+        self.sfcs_proc = multiprocessing.Process(
+            target=sfcs_process_main_curvefit,
+            args=(self.input_file.get(), int(self.channel.get()), cpu_n, self.sfcs_queue),
+            kwargs=dict(chunk_lines=500, max_workers=64),  # tune these
+            daemon=False
+        )
+        self.sfcs_proc.start()
 
-        # Start polling the progress queue in a separate thread to keep GUI responsive
-        def poll_queue():
-            progress = 0
-            while progress <= 100:
-                try:
-                    progress = self.progress_queue.get(block=False)
-                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
-                    self.root.after(0, lambda: self.progress_bar.update_idletasks())
-                    if progress == 100:
-                        self.root.after(0, lambda: self.progress_bar.pack_forget())
-                        self.root.after(0, lambda: self.progress_bar.update_idletasks())
-                        break
-                except:
-                    pass
-
-        threading.Thread(target=poll_queue, daemon=True).start()
+        self._poll_sfcs_queue()
 
     def update_simulation_display(self):
         """Update the simulation display with multiple views"""

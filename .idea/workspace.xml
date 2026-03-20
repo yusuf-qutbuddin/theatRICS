@@ -5,13 +5,7 @@
       <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/theatRICS.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/theatRICS.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SFCS.py" beforeDir="false" afterPath="$PROJECT_DIR$/SFCS.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/inspect_metadata_get.py" beforeDir="false" afterPath="$PROJECT_DIR$/inspect_metadata_get.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/results_csv.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/results_csv_1D.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rics_fit.py" beforeDir="false" afterPath="$PROJECT_DIR$/rics_fit.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/sfcs_lines.tif" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/sfcs_lines_aligned.tif" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/SFCS_module.py" beforeDir="false" afterPath="$PROJECT_DIR$/SFCS_module.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/theatRICS_gui.py" beforeDir="false" afterPath="$PROJECT_DIR$/theatRICS_gui.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -48,6 +42,7 @@
     &quot;Python.inspect_metadata_get.executor&quot;: &quot;Run&quot;,
     &quot;Python.test_simulation_SFCS.executor&quot;: &quot;Run&quot;,
     &quot;Python.theatRICS_gui.executor&quot;: &quot;Run&quot;,
+    &quot;Python.theatRICS_tester.executor&quot;: &quot;Run&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
@@ -80,29 +75,6 @@
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="RUN_TOOL" value="" />
       <option name="SCRIPT_NAME" value="W:/_Protocols/FCS_Scripts/v_20231031/Multi_fitter.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration name="RICS_automation" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="theatRICS" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/../../../FRAP_automation" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="RUN_TOOL" value="" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/../../../FRAP_automation/RICS_automation.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -180,20 +152,43 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
+    <configuration name="theatRICS_tester" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="theatRICS" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/theatRICS_tester.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
     <recent_temporary>
       <list>
         <item itemvalue="Python.theatRICS_gui" />
+        <item itemvalue="Python.theatRICS_tester" />
         <item itemvalue="Python.Multi_fitter" />
         <item itemvalue="Python.SFCS" />
         <item itemvalue="Python.inspect_metadata_get" />
-        <item itemvalue="Python.RICS_automation" />
       </list>
     </recent_temporary>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-python-sdk-ca5e2b39c7df-6e1f45a539f7-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.29346.308" />
+        <option value="bundled-python-sdk-f2b7a9f6281b-6e1f45a539f7-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.29346.142" />
       </set>
     </attachedChunks>
   </component>
@@ -219,28 +214,27 @@
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/theatRICS_gui.py</url>
-          <line>252</line>
-          <option name="timeStamp" value="1" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/theatRICS_gui.py</url>
-          <line>531</line>
+          <line>596</line>
           <option name="timeStamp" value="2" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/theatRICS_gui.py</url>
-          <line>612</line>
+          <line>677</line>
           <option name="timeStamp" value="3" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/theatRICS_gui.py</url>
-          <line>671</line>
+          <line>736</line>
           <option name="timeStamp" value="5" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/theatRICS_gui.py</url>
-          <line>633</line>
+          <line>698</line>
           <option name="timeStamp" value="7" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/SFCS_module.py</url>
+          <option name="timeStamp" value="8" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
