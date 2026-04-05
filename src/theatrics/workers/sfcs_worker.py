@@ -1,9 +1,10 @@
 import numpy as np
 import multiprocessing as mp
 import traceback
+from theatrics.utils.bleach_correction import fit_bleach_trend, depletion_correct
 from theatrics.modules import SFCS_module
 
-def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,cancel_event,
+def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q, cancel_event, bleach_corr,
                                chunk_lines=500, max_workers=None):
     """
     Whole SFCS pipeline in a separate process.
@@ -76,20 +77,47 @@ def sfcs_process_main_curvefit(input_file, channel, cpu_n, out_q,cancel_event,
             return
         out_q.put(("progress", 75.0))
         intensity_traces = SFCS_module.calculate_intensity_trace(aligned_data, n_lines, n_pixels, sigmas, root)
-        if cancel_event.is_set():
-            out_q.put(("cancelled", None))
-            return
-        out_q.put(("progress", 90.0))
-        G, G_std = SFCS_module.run_autocorrelation(intensity_traces, line_time_s, root)
+        if bleach_corr:
+            # build time axis: one point per line
+            t = np.arange(len(intensity_traces)) * line_time_s
+
+            # fit f(t) to the trace
+            f_t, f0, popt, model = fit_bleach_trend(t, intensity_traces, model="exp1")  # or "exp2"
+            out_q.put(("progress", 85.0))
+            # apply Eq. 4
+            correct_intensity_traces = depletion_correct(intensity_traces, f_t, f0)
+            if cancel_event.is_set():
+                out_q.put(("cancelled", None))
+                return
+            out_q.put(("progress", 90.0))
+            G, G_std = SFCS_module.run_autocorrelation(correct_intensity_traces, line_time_s, root)
+            out_q.put(("progress", 100.0))
+            out_q.put(("done", dict(
+                frame_data=frame_data,
+                aligned_data=aligned_data,
+                intensity_traces=intensity_traces,
+                correct_intensity_traces=correct_intensity_traces,
+                G=G,
+                G_std=G_std
+            )))
+        else:
+            out_q.put(("progress", 90.0))
+            if cancel_event.is_set():
+                out_q.put(("cancelled", None))
+                return
+            G, G_std = SFCS_module.run_autocorrelation(intensity_traces, line_time_s, root)
+            out_q.put(("progress", 100.0))
+            out_q.put(("done", dict(
+                frame_data=frame_data,
+                aligned_data=aligned_data,
+                intensity_traces=intensity_traces,
+                G=G,
+                G_std=G_std
+            )))
         
-        out_q.put(("progress", 100.0))
-        out_q.put(("done", dict(
-            frame_data=frame_data,
-            aligned_data=aligned_data,
-            intensity_traces=intensity_traces,
-            G=G,
-            G_std=G_std
-        )))
+        
+        
+        
 
     except Exception:
         out_q.put(("error", traceback.format_exc()))

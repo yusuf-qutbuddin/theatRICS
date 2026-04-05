@@ -98,7 +98,7 @@ def wohland_bootstrap(intensity_traces, line_time_s,G_lags, n_synthetic=500, n_p
     n_synthetic: Number of synthetic correlation curves
     n_pairs_per_lag: Photon pairs sampled per lag time
     """
-    print("Running Bootstrap standard deviation...")
+    
 
     trace = intensity_traces.astype(float) - np.mean(intensity_traces)  # DEMEAN FIRST
     n_samples = len(trace)
@@ -129,7 +129,7 @@ def wohland_bootstrap(intensity_traces, line_time_s,G_lags, n_synthetic=500, n_p
     return np.std(synthetic_Gs, axis=0)
 
 def run_autocorrelation(intensity_traces, line_time_s, root):
-    print("Running multipletau for autocorrelation...")
+    
     G = multipletau.autocorrelate(intensity_traces, m=12, deltat=line_time_s, normalize=True)
     G_std = wohland_bootstrap(intensity_traces, line_time_s,G[:,0], n_synthetic=1000, n_pairs_per_lag=10000)
     countrate = np.full_like(G_std, np.mean(intensity_traces))

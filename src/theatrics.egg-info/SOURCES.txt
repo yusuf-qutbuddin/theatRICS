@@ -16,6 +16,7 @@ src/theatrics/modules/inspect_metadata.py
 src/theatrics/modules/rics_fit.py
 src/theatrics/modules/simRICS.py
 src/theatrics/utils/__init__.py
+src/theatrics/utils/bleach_correction.py
 src/theatrics/utils/file_utils.py
 src/theatrics/utils/mp_utils.py
 src/theatrics/workers/__init__.py

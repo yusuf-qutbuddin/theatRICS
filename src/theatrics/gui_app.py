@@ -9,7 +9,7 @@ Modular RICS Analysis GUI Application
 Imports existing RICS modules and provides a unified interface
 """
 import os
-
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import sv_ttk
@@ -107,11 +107,16 @@ class ModularRICSGUI:
         self.status_var.set("Ready - All modules loaded successfully")
         self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN)
         self.status_bar.grid(row=1, column=0, sticky='w')
-        self.button = ttk.Button(self.root, text="Toggle Dark Mode", command=sv_ttk.toggle_theme)
-        self.cancel_button = ttk.Button(self.root, text="Cancel Running Task", command=self.cancel_current_task)
-        self.cancel_button.grid(row=1, column=0, sticky="e", padx=(0, 140))  # adjust padx to avoid overlap with dark-mode button
-        self.button.grid(row=1, column=0, sticky='e')
+        button_frame = ttk.Frame(self.root)
+        button_frame.grid(row=1, column=0, sticky="e", padx=10)
+        self.button = ttk.Button(button_frame, text="Toggle Dark Mode", command=sv_ttk.toggle_theme)
+        self.button.pack(side=tk.LEFT, padx=5)
 
+        self.cancel_button = ttk.Button(button_frame, text="Cancel Running Task", command=self.cancel_current_task)
+        self.cancel_button.pack(side=tk.LEFT, padx=5)
+
+        self.restart_button = ttk.Button(button_frame, text="Restart", command=self.restart_application)
+        self.restart_button.pack(side=tk.LEFT, padx=5)
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self.root, variable=self.progress_var, maximum=100)
         self.progress_bar.grid(row=2, column=0, sticky='ew')
@@ -354,6 +359,10 @@ class ModularRICSGUI:
         model_combo = ttk.Combobox(channel_frame, textvariable=self.sfcs_channel,  # Fixed parent
                                    values=["0", "1"], width=12)  # String values for Combobox
         model_combo.pack(side=tk.LEFT)  # Fixed: proper packing
+
+        row += 1
+        self.correct_bleach = tk.BooleanVar()
+        ttk.Checkbutton(SFCS_params, text="Bleach Correction", variable=self.correct_bleach).grid(row=row, column=0, columnspan=2, sticky='w', pady=2)
 
         row += 1
         ttk.Label(SFCS_params, text="Number of cores").grid(row=row, column=0, sticky='w', pady=2)
@@ -848,6 +857,9 @@ class ModularRICSGUI:
                     self.frame_data = payload["frame_data"]
                     self.aligned_data = payload["aligned_data"]
                     self.intensity_traces = payload["intensity_traces"]
+                    if "correct_intensity_traces" in payload:
+                        self.log_message("Bleach corrected...")
+                        self.correct_intensity_traces = payload["correct_intensity_traces"]
                     self.G = payload["G"]
                     self.G_std = payload["G_std"]
 
@@ -886,7 +898,7 @@ class ModularRICSGUI:
             messagebox.showwarning("Warning", "Please select an input file first")
             return
 
-        self.log_message("Starting SFCS (curve_fit + process pool + chunking)...")
+        self.log_message("Starting SFCS...")
         self.status_var.set("Running correlation...")
         self.progress_var.set(0.0)
         self.progress_bar.grid()  # since you used grid for it
@@ -902,7 +914,7 @@ class ModularRICSGUI:
         # non-daemon is REQUIRED because worker will create a Pool
         self.sfcs_proc = multiprocessing.Process(
             target=sfcs_process_main_curvefit,
-            args=(self.sfcs_input_file.get(), int(self.sfcs_channel.get()), cpu_n, self.sfcs_queue, self.sfcs_cancel_event),
+            args=(self.sfcs_input_file.get(), int(self.sfcs_channel.get()), cpu_n, self.sfcs_queue, self.sfcs_cancel_event, self.correct_bleach.get()),
             kwargs=dict(chunk_lines=500, max_workers=64),  # tune these
             daemon=False
         )
@@ -962,13 +974,15 @@ class ModularRICSGUI:
             # 3. Intensity trace from central crop region
             ax3 = self.SFCS_fig.add_subplot(gs[1, 0])
             intensity_traces = self.intensity_traces
+            correct_intensity_traces = self.correct_intensity_traces
+            ax3.plot(intensity_traces, 'b-', linewidth=1.5, label = "intensity", alpha = 0.5)
+            ax3.plot(correct_intensity_traces, 'r--', linewidth=1.5, label = "bleach corrected intensity", alpha = 0.5)
 
-            ax3.plot(intensity_traces, 'b-', linewidth=1.5)
             ax3.set_title('Average Intensity vs Frame')
             ax3.set_xlabel('Frame')
             ax3.set_ylabel('Intensity')
             ax3.grid(True, alpha=0.3)
-
+            ax3.legend()
             # 4. SFCS Correlation curve - updated plotting style
             ax4 = self.SFCS_fig.add_subplot(gs[1, 1])
             if hasattr(self, 'G') and self.G is not None:
@@ -1386,11 +1400,13 @@ class ModularRICSGUI:
                 elif msg_type == "done":
                     self.set_ui_busy(False)
                     # single done has summary/npz_path; batch done just has n_total
-                    self.current_file = summary["filepath"]
+                    
                     if "npz_path" in payload:
                         self._load_fit_npz_and_update(payload["npz_path"], payload["summary"])
+                        summary = payload["summary"]
+                        self.current_file = summary["filepath"]
                     self.status_var.set("Ready")
-                    
+                    self.log_message("Fit completed")
                     self.progress_bar.grid_remove()
                     return
 
@@ -2035,6 +2051,22 @@ class ModularRICSGUI:
 
     def shutdown(self):
         self._cleanup_mp()
+
+    def restart_application(self):
+        if not messagebox.askyesno(
+            "Restart Application",
+            "This will restart the software and clear all data.\n\nContinue?"
+        ):
+            return
+
+        try:
+            self.log_message("Restarting application...")
+            self.cancel_current_task()
+            self._cleanup_mp()
+            self.root.destroy()
+        finally:
+            python = sys.executable
+            os.execv(python, [python] + sys.argv)
         
 
 
