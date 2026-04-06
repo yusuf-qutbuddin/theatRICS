@@ -34,3 +34,13 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[
+project.optional-dependencies
+]
+docs = [
+  "sphinx",
+  "sphinx-rtd-theme",
+  "myst-parser",
+  "sphinx-copybutton",
+]

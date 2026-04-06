@@ -1,0 +1,240 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API reference &mdash; theatRICS  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=f281be69"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="prev" title="Troubleshooting" href="troubleshooting.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            theatRICS
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gui_app.html">GUI overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Outputs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">API reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#module-theatrics.workers.export_worker">Workers</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.workers.export_worker.export_rics_process_main"><code class="docutils literal notranslate"><span class="pre">export_rics_process_main()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.workers.fit_worker.fit_rics_one_file"><code class="docutils literal notranslate"><span class="pre">fit_rics_one_file()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.workers.fit_worker.fit_rics_process_main"><code class="docutils literal notranslate"><span class="pre">fit_rics_process_main()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.workers.sfcs_worker.sfcs_process_main_curvefit"><code class="docutils literal notranslate"><span class="pre">sfcs_process_main_curvefit()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.workers.diffmap_worker.diffusion_map_process_main"><code class="docutils literal notranslate"><span class="pre">diffusion_map_process_main()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#module-theatrics.utils.file_utils">Utilities</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.utils.file_utils.get_files_from_folder"><code class="docutils literal notranslate"><span class="pre">get_files_from_folder()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.utils.mp_utils.clamp_workers"><code class="docutils literal notranslate"><span class="pre">clamp_workers()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.utils.mp_utils.set_single_threaded_blas"><code class="docutils literal notranslate"><span class="pre">set_single_threaded_blas()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#theatrics.utils.mp_utils.setup_multiprocessing"><code class="docutils literal notranslate"><span class="pre">setup_multiprocessing()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">theatRICS</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">API reference</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/api.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="api-reference">
+<h1>API reference<a class="headerlink" href="#api-reference" title="Link to this heading"></a></h1>
+<p>This section documents selected modules that are safe to import in a headless
+documentation build. GUI modules are intentionally excluded.</p>
+<section id="module-theatrics.workers.export_worker">
+<span id="workers"></span><h2>Workers<a class="headerlink" href="#module-theatrics.workers.export_worker" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="theatrics.workers.export_worker.export_rics_process_main">
+<span class="sig-prename descclassname"><span class="pre">theatrics.workers.export_worker.</span></span><span class="sig-name descname"><span class="pre">export_rics_process_main</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cancel_event</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/workers/export_worker.html#export_rics_process_main"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.workers.export_worker.export_rics_process_main" title="Link to this definition"></a></dt>
+<dd><dl class="simple">
+<dt>params keys:</dt><dd><p>input_file, channel, crop_factor, window_size, correct_drift</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function" id="module-theatrics.workers.fit_worker">
+<dt class="sig sig-object py" id="theatrics.workers.fit_worker.fit_rics_one_file">
+<span class="sig-prename descclassname"><span class="pre">theatrics.workers.fit_worker.</span></span><span class="sig-name descname"><span class="pre">fit_rics_one_file</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_q</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/workers/fit_worker.html#fit_rics_one_file"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.workers.fit_worker.fit_rics_one_file" title="Link to this definition"></a></dt>
+<dd><p>Returns (summary_dict, npz_path).</p>
+<dl class="simple">
+<dt>params keys expected:</dt><dd><p>rics_file, saving_path,
+crop_fast, crop_slow,
+diffusion_model,
+channel_to_use (for metadata),
+fit_pixel_size_nm, fit_pixel_dwell_us, fit_line_time_ms  (fallback)
+psf_size_xy_um, psf_aspect_ratio
+do_fit_1d (bool)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="theatrics.workers.fit_worker.fit_rics_process_main">
+<span class="sig-prename descclassname"><span class="pre">theatrics.workers.fit_worker.</span></span><span class="sig-name descname"><span class="pre">fit_rics_process_main</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cancel_event</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/workers/fit_worker.html#fit_rics_process_main"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.workers.fit_worker.fit_rics_process_main" title="Link to this definition"></a></dt>
+<dd><p>Worker entry point.
+Supports single file OR batch (list of rics files).</p>
+<dl class="simple">
+<dt>params keys:</dt><dd><p>mode: “single” or “batch”
+rics_file OR rics_files (list)
+… plus keys required by fit_rics_one_file()</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function" id="module-theatrics.workers.sfcs_worker">
+<dt class="sig sig-object py" id="theatrics.workers.sfcs_worker.sfcs_process_main_curvefit">
+<span class="sig-prename descclassname"><span class="pre">theatrics.workers.sfcs_worker.</span></span><span class="sig-name descname"><span class="pre">sfcs_process_main_curvefit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_file</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cpu_n</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cancel_event</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bleach_corr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_lines</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">500</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_workers</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/workers/sfcs_worker.html#sfcs_process_main_curvefit"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.workers.sfcs_worker.sfcs_process_main_curvefit" title="Link to this definition"></a></dt>
+<dd><p>Whole SFCS pipeline in a separate process.
+Gaussian fitting uses curve_fit in parallel via multiprocessing.Pool + chunking.</p>
+<p>out_q messages: (“progress”, pct) / (“done”, payload) / (“error”, tb)</p>
+</dd></dl>
+
+<dl class="py function" id="module-theatrics.workers.diffmap_worker">
+<dt class="sig sig-object py" id="theatrics.workers.diffmap_worker.diffusion_map_process_main">
+<span class="sig-prename descclassname"><span class="pre">theatrics.workers.diffmap_worker.</span></span><span class="sig-name descname"><span class="pre">diffusion_map_process_main</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cancel_event</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/workers/diffmap_worker.html#diffusion_map_process_main"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.workers.diffmap_worker.diffusion_map_process_main" title="Link to this definition"></a></dt>
+<dd><dl class="simple">
+<dt>params keys:</dt><dd><p>input_file (czi), channel (int),
+psf_xy_um, psf_aspect_ratio,
+window_size, offset,
+diffusion_model (“2Ddiff” or “3Ddiff”),
+cpu_n (optional)</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-theatrics.utils.file_utils">
+<span id="utilities"></span><h2>Utilities<a class="headerlink" href="#module-theatrics.utils.file_utils" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="theatrics.utils.file_utils.get_files_from_folder">
+<span class="sig-prename descclassname"><span class="pre">theatrics.utils.file_utils.</span></span><span class="sig-name descname"><span class="pre">get_files_from_folder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">folder_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extension</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">suffix</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/utils/file_utils.html#get_files_from_folder"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.utils.file_utils.get_files_from_folder" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function" id="module-theatrics.utils.mp_utils">
+<dt class="sig sig-object py" id="theatrics.utils.mp_utils.clamp_workers">
+<span class="sig-prename descclassname"><span class="pre">theatrics.utils.mp_utils.</span></span><span class="sig-name descname"><span class="pre">clamp_workers</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">requested</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_fraction</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.8</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_workers</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hard_cap</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/utils/mp_utils.html#clamp_workers"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.utils.mp_utils.clamp_workers" title="Link to this definition"></a></dt>
+<dd><p>Choose a safe number of workers based on machine capacity and user request.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>requested</strong> (<em>int</em>) – User requested workers (e.g. from GUI input).</p></li>
+<li><p><strong>max_fraction</strong> (<em>float</em>) – Fraction of logical CPUs to allow (0..1).</p></li>
+<li><p><strong>min_workers</strong> (<em>int</em>) – Minimum workers.</p></li>
+<li><p><strong>hard_cap</strong> (<em>int</em><em> or </em><em>None</em>) – Absolute maximum, useful for e.g. Windows overhead control.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Worker count to use.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="theatrics.utils.mp_utils.set_single_threaded_blas">
+<span class="sig-prename descclassname"><span class="pre">theatrics.utils.mp_utils.</span></span><span class="sig-name descname"><span class="pre">set_single_threaded_blas</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/utils/mp_utils.html#set_single_threaded_blas"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.utils.mp_utils.set_single_threaded_blas" title="Link to this definition"></a></dt>
+<dd><p>Prevents OpenBLAS/MKL/NumExpr/OMP from using many threads inside each process.
+Call this before importing numpy/scipy-heavy modules if possible.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="theatrics.utils.mp_utils.setup_multiprocessing">
+<span class="sig-prename descclassname"><span class="pre">theatrics.utils.mp_utils.</span></span><span class="sig-name descname"><span class="pre">setup_multiprocessing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start_method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'spawn'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">force</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/theatrics/utils/mp_utils.html#setup_multiprocessing"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#theatrics.utils.mp_utils.setup_multiprocessing" title="Link to this definition"></a></dt>
+<dd><p>Call once in main entry point (main.py), inside if __name__ == ‘__main__’.
+On Windows/macOS ‘spawn’ is the safe default.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="troubleshooting.html" class="btn btn-neutral float-left" title="Troubleshooting" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright .</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

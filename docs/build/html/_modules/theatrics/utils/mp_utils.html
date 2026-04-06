@@ -1,0 +1,175 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>theatrics.utils.mp_utils &mdash; theatRICS  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="../../../_static/copybutton.js?v=f281be69"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            theatRICS
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gui_app.html">GUI overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../outputs.html">Outputs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html">API reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">theatRICS</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">theatrics.utils.mp_utils</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for theatrics.utils.mp_utils</h1><div class="highlight"><pre>
+<span></span><span class="c1"># utils/mp_utils.py</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">multiprocessing</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mp</span>
+
+<div class="viewcode-block" id="set_single_threaded_blas">
+<a class="viewcode-back" href="../../../api.html#theatrics.utils.mp_utils.set_single_threaded_blas">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">set_single_threaded_blas</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Prevents OpenBLAS/MKL/NumExpr/OMP from using many threads inside each process.</span>
+<span class="sd">    Call this before importing numpy/scipy-heavy modules if possible.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;OPENBLAS_NUM_THREADS&quot;</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;MKL_NUM_THREADS&quot;</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;NUMEXPR_NUM_THREADS&quot;</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;OMP_NUM_THREADS&quot;</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="setup_multiprocessing">
+<a class="viewcode-back" href="../../../api.html#theatrics.utils.mp_utils.setup_multiprocessing">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">setup_multiprocessing</span><span class="p">(</span><span class="n">start_method</span><span class="o">=</span><span class="s2">&quot;spawn&quot;</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Call once in main entry point (main.py), inside if __name__ == &#39;__main__&#39;.</span>
+<span class="sd">    On Windows/macOS &#39;spawn&#39; is the safe default.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mp</span><span class="o">.</span><span class="n">set_start_method</span><span class="p">(</span><span class="n">start_method</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="n">force</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="clamp_workers">
+<a class="viewcode-back" href="../../../api.html#theatrics.utils.mp_utils.clamp_workers">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">clamp_workers</span><span class="p">(</span><span class="n">requested</span><span class="p">,</span> <span class="n">max_fraction</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span> <span class="n">min_workers</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">hard_cap</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Choose a safe number of workers based on machine capacity and user request.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    requested : int</span>
+<span class="sd">        User requested workers (e.g. from GUI input).</span>
+<span class="sd">    max_fraction : float</span>
+<span class="sd">        Fraction of logical CPUs to allow (0..1).</span>
+<span class="sd">    min_workers : int</span>
+<span class="sd">        Minimum workers.</span>
+<span class="sd">    hard_cap : int or None</span>
+<span class="sd">        Absolute maximum, useful for e.g. Windows overhead control.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    int</span>
+<span class="sd">        Worker count to use.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">ncpu</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">cpu_count</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">requested</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">requested</span> <span class="o">=</span> <span class="n">ncpu</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">requested</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">requested</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+        <span class="n">requested</span> <span class="o">=</span> <span class="n">ncpu</span>
+
+    <span class="n">allowed</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">min_workers</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_fraction</span> <span class="o">*</span> <span class="n">ncpu</span><span class="p">))</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">requested</span><span class="p">,</span> <span class="n">allowed</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">hard_cap</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">hard_cap</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">min_workers</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright .</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,153 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Troubleshooting &mdash; theatRICS  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=f281be69"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="API reference" href="api.html" />
+    <link rel="prev" title="Outputs" href="outputs.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            theatRICS
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gui_app.html">GUI overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Outputs</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Troubleshooting</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#read-the-docs-build-fails-on-pylibczirw">Read the Docs build fails on <code class="docutils literal notranslate"><span class="pre">pylibCZIrw</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="#matplotlib-display-errors">Matplotlib / display errors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#multiprocessing-notes-windows">Multiprocessing notes (Windows)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#tkinter-missing-linux">Tkinter missing (Linux)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">theatRICS</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Troubleshooting</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/troubleshooting.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="troubleshooting">
+<h1>Troubleshooting<a class="headerlink" href="#troubleshooting" title="Link to this heading"></a></h1>
+<section id="read-the-docs-build-fails-on-pylibczirw">
+<h2>Read the Docs build fails on <code class="docutils literal notranslate"><span class="pre">pylibCZIrw</span></code><a class="headerlink" href="#read-the-docs-build-fails-on-pylibczirw" title="Link to this heading"></a></h2>
+<p>This is common because CZI readers may require system libraries not present on RTD.</p>
+<p>Solution (recommended):</p>
+<ul class="simple">
+<li><p>Add a <code class="docutils literal notranslate"><span class="pre">docs</span></code> extra in <code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code> and configure RTD to install only docs
+dependencies, while mocking <code class="docutils literal notranslate"><span class="pre">pylibCZIrw</span></code> in <code class="docutils literal notranslate"><span class="pre">conf.py</span></code>.</p></li>
+</ul>
+<p>If you paste the RTD build log error, I can give you the exact fix.</p>
+</section>
+<section id="matplotlib-display-errors">
+<h2>Matplotlib / display errors<a class="headerlink" href="#matplotlib-display-errors" title="Link to this heading"></a></h2>
+<p>RTD is headless. The docs configuration forces:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">MPLBACKEND=Agg</span></code></p></li>
+</ul>
+</section>
+<section id="multiprocessing-notes-windows">
+<h2>Multiprocessing notes (Windows)<a class="headerlink" href="#multiprocessing-notes-windows" title="Link to this heading"></a></h2>
+<p>When running from source on Windows, ensure GUI startup is protected by:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">main</span><span class="p">()</span>
+
+</pre></div>
+</div>
+</section>
+<section id="tkinter-missing-linux">
+<h2>Tkinter missing (Linux)<a class="headerlink" href="#tkinter-missing-linux" title="Link to this heading"></a></h2>
+<p>Install system Tk support (package name varies by distribution, often <code class="docutils literal notranslate"><span class="pre">python3-tk</span></code>).</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="outputs.html" class="btn btn-neutral float-left" title="Outputs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="api.html" class="btn btn-neutral float-right" title="API reference" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright .</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
