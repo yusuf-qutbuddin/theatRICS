@@ -26,15 +26,6 @@ dependencies = [
   # plus any others you use (lmfit, etc.)
 ]
 
-[project.scripts]
-theatrics = "theatrics.main:main"
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
 [
 project.optional-dependencies
 ]
@@ -44,3 +35,13 @@ docs = [
   "myst-parser",
   "sphinx-copybutton",
 ]
+
+[project.scripts]
+theatrics = "theatrics.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
