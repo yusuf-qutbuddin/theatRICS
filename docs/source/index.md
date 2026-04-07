@@ -13,6 +13,7 @@ gui_app
 workflow/rics_export
 workflow/rics_fitting
 workflow/sfcs
+workflow/fcs_fitting
 workflow/diffusion_map
 outputs
 troubleshooting
