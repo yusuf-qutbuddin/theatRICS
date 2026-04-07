@@ -9,3 +9,10 @@ sv-ttk
 pylibCZIrw
 scikit-image
 lmfit
+statsmodels
+
+[docs]
+sphinx
+sphinx-rtd-theme
+myst-parser
+sphinx-copybutton

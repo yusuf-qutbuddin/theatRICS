@@ -32,7 +32,9 @@ from theatrics.workers.export_worker import export_rics_process_main
 from theatrics.workers.fit_worker import fit_rics_process_main
 from theatrics.workers.sim_worker import simulate_rics_process_main
 from theatrics.workers.diffmap_worker import diffusion_map_process_main
+from theatrics.workers.fcsfit_worker import fcsfit_process_main
 
+from theatrics.fcsfit import calculations as calculate
 from theatrics.utils.file_utils import get_files_from_folder
 from theatrics.utils.mp_utils import clamp_workers
 
@@ -100,6 +102,7 @@ class ModularRICSGUI:
         self.create_rics_export_tab()  
         self.create_fitting_tab()
         self.create_SFCS_tab()
+        self.create_fcs_fit_tab()
         self.create_results_tab()
 
 
@@ -400,6 +403,185 @@ class ModularRICSGUI:
         if filename:
             self.file_for_metadata.set(filename)
             
+    def create_fcs_fit_tab(self):
+        fcs_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fcs_frame, text="FCS Fitting")
+
+        params_frame = ttk.LabelFrame(fcs_frame, text="FCS Fit Parameters", padding=10)
+        params_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        row = 0
+        ttk.Label(params_frame, text="Single CSV:").grid(row=row, column=0, sticky="w")
+        self.fcsfit_csv = tk.StringVar()
+        e = ttk.Entry(params_frame, textvariable=self.fcsfit_csv, width=28)
+        e.grid(row=row, column=1, sticky="ew")
+        b = ttk.Button(params_frame, text="Browse", command=self.browse_fcsfit_csv)
+        b.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e)
+        self.register_busy_widget(b)
+
+        row += 1
+        ttk.Label(params_frame, text="Batch folder:").grid(row=row, column=0, sticky="w")
+        self.fcsfit_folder = tk.StringVar()
+        e2 = ttk.Entry(params_frame, textvariable=self.fcsfit_folder, width=28)
+        e2.grid(row=row, column=1, sticky="ew")
+        b2 = ttk.Button(params_frame, text="Browse", command=self.browse_fcsfit_folder)
+        b2.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e2)
+        self.register_busy_widget(b2)
+
+        row += 1
+        ttk.Label(params_frame, text="Model:").grid(row=row, column=0, sticky="w")
+        self.fcsfit_model = tk.StringVar(value="g3diffCal")
+        cmb = ttk.Combobox(
+            params_frame,
+            textvariable=self.fcsfit_model,
+            values=[
+                    "g3diffCal", "g3diffBlinkCal", "g3diff", "g3diffOffset", "g3diffBlink", "g3diffBlinkOffset", 
+                    "g3diffDoubleBlink", "g3lorentzianZ", "g3lorentzianZCal", "g3anomalousDiff", "g3anomalousDiffBlink", 
+                    "g3diffTwoComponents", "g3diffTwoComponentsBlink", "siFCS", "siFCSTwoComponents", "g3diffMEMFCS", 
+                    "g3diffLargeParticles", "g2diff", "g2diffTwoComponents", "g2diffOffset", "g2diffBlink","g2diffSFCS",
+
+            ],
+            width=22,
+        )
+        cmb.grid(row=row, column=1, sticky="w")
+        self.register_busy_widget(cmb)
+        # somewhere in create_fcs_fit_tab after you create the model combobox:
+        self.fcs_initparams_host = ttk.LabelFrame(params_frame, text="Initial parameters (model-dependent)", padding=10)
+        self.fcs_initparams_host.grid(row=row+1, column=0, columnspan=3, sticky="ew", pady=10)
+        self.fcs_param_vars = {}       # key -> tk.StringVar (current visible ones)
+        self.fcs_param_cache = {}      # key -> last user-entered string (persists across model switches)
+
+        # rebuild once initially
+        self._rebuild_fcs_param_editor()
+
+        # bind combobox change
+        # bind combobox change (visibility will work once calib frame exists)
+        cmb.bind("<<ComboboxSelected>>", lambda e: (self._rebuild_fcs_param_editor(), self._update_fcs_calibration_visibility()))
+
+        row += 2
+        ttk.Label(params_frame, text="Tau min (s):").grid(row=row, column=0, sticky="w")
+        self.fcsfit_tau_min = tk.StringVar(value="1e-6")
+        ttk.Entry(params_frame, textvariable=self.fcsfit_tau_min, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Tau max (s):").grid(row=row, column=0, sticky="w")
+        self.fcsfit_tau_max = tk.StringVar(value="1.0")
+        ttk.Entry(params_frame, textvariable=self.fcsfit_tau_max, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="PSF radius (µm):").grid(row=row, column=0, sticky="w")
+        self.fcsfit_psf_radius = tk.StringVar(value="0.25")
+        ttk.Entry(params_frame, textvariable=self.fcsfit_psf_radius, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="PSF aspect ratio:").grid(row=row, column=0, sticky="w")
+        self.fcsfit_psf_ar = tk.StringVar(value="5.0")
+        ttk.Entry(params_frame, textvariable=self.fcsfit_psf_ar, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Experiment T (°C):").grid(row=row, column=0, sticky="w")
+        self.fcsfit_expt_T = tk.StringVar(value="30")
+        ttk.Entry(params_frame, textvariable=self.fcsfit_expt_T, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        self.fcsfit_calib_frame = ttk.LabelFrame(params_frame, text="Calibration parameters", padding=8)
+        self.fcsfit_calib_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=8)
+        
+        r2 = 0
+        ttk.Label(self.fcsfit_calib_frame, text="Given D (µm²/s):").grid(row=r2, column=0, sticky="w")
+        self.fcsfit_givenD = tk.StringVar(value="435")
+        ttk.Entry(self.fcsfit_calib_frame, textvariable=self.fcsfit_givenD, width=10).grid(row=r2, column=1, sticky="w")
+        # now that calib frame exists, set correct initial visibility
+        self._update_fcs_calibration_visibility()
+        r2 += 1
+        ttk.Label(self.fcsfit_calib_frame, text="Given D temp (°C):").grid(row=r2, column=0, sticky="w")
+        self.fcsfit_givenD_T = tk.StringVar(value="25")
+        ttk.Entry(self.fcsfit_calib_frame, textvariable=self.fcsfit_givenD_T, width=10).grid(row=r2, column=1, sticky="w")
+
+        row += 1
+        btn_frame = ttk.Frame(params_frame)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+
+        self.fcsfit_run_btn = ttk.Button(btn_frame, text="Run Fit", command=self.run_fcsfit)
+        self.fcsfit_run_btn.pack(side=tk.LEFT, padx=5)
+        self.register_busy_widget(self.fcsfit_run_btn)
+
+        # Right side: log/plot placeholder (reuse Results tab for logs)
+        display_frame = ttk.LabelFrame(fcs_frame, text="Info", padding=10)
+        display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        ttk.Label(
+            display_frame,
+            text="FCS fitting outputs are saved to a Results/ folder next to each input CSV.\nSee the Results & Logs tab for progress.",
+            justify="left"
+        ).pack(anchor="nw")
+        self.fcsfit_fig = Figure(figsize=(8, 6), dpi=100, facecolor="gray")
+        self.fcsfit_canvas = FigureCanvasTkAgg(self.fcsfit_fig, display_frame)
+        self.fcsfit_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(self.fcsfit_canvas, display_frame)
+        toolbar.update()
+    def _rebuild_fcs_param_editor(self):
+        # clear previous widgets
+        for w in self.fcs_initparams_host.winfo_children():
+            w.destroy()
+
+        defaults = self.fcs_default_initial_params()
+        model = self.fcsfit_model.get()
+        keys_map = self.fcs_model_param_keys()
+        keys = keys_map.get(model, ["N", "tau diffusion"])  # fallback
+
+        self.fcs_param_vars = {}
+
+        # grid
+        self.fcs_initparams_host.grid_columnconfigure(1, weight=1)
+
+        for r, key in enumerate(keys):
+            ttk.Label(self.fcs_initparams_host, text=key).grid(row=r, column=0, sticky="w", pady=2)
+
+            # prefer cached user input if present, else default
+            initial_text = self.fcs_param_cache.get(key, str(defaults.get(key, "")))
+            v = tk.StringVar(value=initial_text)
+
+            e = ttk.Entry(self.fcs_initparams_host, textvariable=v, width=18)
+            e.grid(row=r, column=1, sticky="ew", pady=2)
+
+            # when user edits, keep it in cache so switching models doesn't lose it
+            def _make_tracer(k, var):
+                def _tr(*_):
+                    self.fcs_param_cache[k] = var.get()
+                return _tr
+
+            v.trace_add("write", _make_tracer(key, v))
+
+            self.fcs_param_vars[key] = v
+            self.register_busy_widget(e)
+
+    def _update_fcs_calibration_visibility(self):
+        if not hasattr(self, "fcsfit_calib_frame"):
+            return
+
+        model = self.fcsfit_model.get()
+        is_cal = "Cal" in model
+
+        if is_cal:
+            self.fcsfit_calib_frame.grid()
+        else:
+            self.fcsfit_calib_frame.grid_remove()
+    def browse_fcsfit_csv(self):
+        fn = filedialog.askopenfilename(
+            title="Select FCS correlation CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if fn:
+            self.fcsfit_csv.set(fn)
+
+    def browse_fcsfit_folder(self):
+        folder = filedialog.askdirectory(title="Select folder containing correlation CSVs")
+        if folder:
+            self.fcsfit_folder.set(folder)
+
+    
 
     def create_fitting_tab(self):
         """Create the fitting tab using rics_fit module"""
@@ -1011,7 +1193,7 @@ class ModularRICSGUI:
                 ax4.set_title('SFCS Correlation')
 
             self.SFCS_canvas.draw()
-            root, ext = os.path.splitext(str(self.input_file.get()))
+            root, ext = os.path.splitext(str(self.sfcs_input_file.get()))
             self.SFCS_fig.savefig(root+"_correlation.svg",dpi=300, bbox_inches='tight', facecolor='white')
             
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1655,8 +1837,350 @@ class ModularRICSGUI:
             self.fit_fig.tight_layout()
 
             self.fit_canvas.draw()
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------FCS Fitting GUI-------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
+    def fcs_default_initial_params(self) -> dict:
+        # legacy defaults
+        return {
+            "N": 0.5,
+            "tau diffusion": 1e-4,
 
+            "Radius of the particle": 0.1,  # um
 
+            "delta": 20,
+            "F_Blink": 0.2,
+
+            "delta1": 500,
+            "delta2": 5,
+            "F_B1": 0.2,
+            "Sigma_F": 0.5,
+
+            "f1": 0.25,
+            "rho_D": 1e1,
+            "rho_B": 2e3,
+
+            "Gamma": 200,
+            "Alpha": 1,
+
+            "G0": 1e-4,
+            "tau characteristic decay": 5,
+
+            "G0_1": 1e-4,
+            "G0_2": 1e-4,
+            "tau characteristic decay short": 30,
+            "tau characteristic decay long": 1000,
+
+            "tau_D limits": [-7, -1],
+            "number of diffusion components": 200,
+            "number of iterations": 20000,
+            # in fcs_default_initial_params()
+            "offset": 0.0,
+        }
+    def _parse_param_value(self, s: str):
+        s = s.strip()
+        if s == "":
+            return None
+
+        # list like [-7, -1]
+        if s.startswith("[") and s.endswith("]"):
+            import ast
+            return ast.literal_eval(s)
+
+        # numeric
+        try:
+            if any(c in s for c in (".", "e", "E")):
+                return float(s)
+            return int(s)
+        except ValueError:
+            return s
+
+    def fcs_model_param_keys(self) -> dict:
+        """
+        Model -> list of parameter keys to display in the GUI.
+        Keys must exist in fcs_default_initial_params().
+        """
+        common = ["N", "tau diffusion"]
+
+        return {
+            # 2D
+            "g2diff": common,
+            "g2diffSFCS": common,
+            "g2diffOffset": common + ["offset"],  # if you support offset for g2
+            "g2diffBlink": common + ["delta", "F_Blink"],
+
+            # 3D
+            "g3diff": common,
+            "g3diffOffset": common + ["offset"],
+            "g3diffLargeParticles": common + ["Radius of the particle"],
+            "g3diffBlink": common + ["delta", "F_Blink"],
+            "g3diffBlinkOffset": common + ["delta", "F_Blink", "offset"],
+            "g3diffDoubleBlink": common + ["delta1", "delta2", "F_B1", "Sigma_F"],
+            "g3lorentzianZ": common,
+            "g3lorentzianZCal": common + ["PSF aspect ratio"],  # only if you use this as an initial param in that model
+            "g3anomalousDiff": ["N", "Gamma", "Alpha"],
+            "g3anomalousDiffBlink": ["N", "Gamma", "Alpha", "delta", "F_Blink"],
+
+            # Two components
+            "g3diffTwoComponents": ["N", "tau diffusion", "f1", "rho_D"],
+            "g2diffTwoComponents": ["N", "tau diffusion", "f1", "rho_D"],
+            "g3diffTwoComponentsBlink": ["N", "tau diffusion", "f1", "rho_D", "rho_B", "F_Blink"],
+
+            # Single exponential
+            "siFCS": ["G0", "tau characteristic decay"],
+            "siFCSTwoComponents": ["G0_1", "G0_2", "tau characteristic decay short", "tau characteristic decay long"],
+
+            # MEMFCS
+            "g3diffMEMFCS": ["tau_D limits", "number of diffusion components", "number of iterations"],
+        }
+
+    def run_fcsfit(self):
+            # Decide mode
+            csv_path = self.fcsfit_csv.get().strip()
+            folder = self.fcsfit_folder.get().strip()
+
+            if not csv_path and not folder:
+                messagebox.showwarning("Warning", "Select a single CSV or a batch folder.")
+                return
+
+            mode = "single" if csv_path else "batch"
+
+            tau_min = float(self.fcsfit_tau_min.get())
+            tau_max = float(self.fcsfit_tau_max.get())
+
+            initial_params = dict(self.fcs_default_initial_params())
+
+            # apply only current visible keys as overrides
+            for key, var in self.fcs_param_vars.items():
+                val = self._parse_param_value(var.get())
+                if val is not None:
+                    initial_params[key] = val
+
+            # compatibility mapping
+            # Provide BOTH keys so legacy code works regardless of which one it expects
+            if "F_Blink" in initial_params and "F_B" not in initial_params:
+                initial_params["F_B"] = initial_params["F_Blink"]
+            if "F_B" in initial_params and "F_Blink" not in initial_params:
+                initial_params["F_Blink"] = initial_params["F_B"]
+            if "dTauD" in initial_params and "sigma tau diffusion" not in initial_params:
+                initial_params["sigma tau diffusion"] = initial_params["dTauD"]
+
+            model = self.fcsfit_model.get()
+            is_cal = "Cal" in model
+
+            kwargs = dict(
+                fitting_model=model,
+                tau_domain=(tau_min, tau_max),
+                user_tau_domain=True,
+                psf_radius_um=float(self.fcsfit_psf_radius.get()),
+                psf_aspect_ratio=float(self.fcsfit_psf_ar.get()),
+                experiment_T=float(self.fcsfit_expt_T.get()),
+                BG_value=0.0,
+                user_initial_params=True,
+                initial_params=initial_params,
+                goodness_of_fit_criterion=["instant_correlation_runsstest"],
+                figure_display_delay=0.001,
+            )
+
+            if is_cal:
+                kwargs["given_D"] = (float(self.fcsfit_givenD.get()), float(self.fcsfit_givenD_T.get()))
+            else:
+                # optional: still provide something, but it won't be used
+                kwargs["given_D"] = (float("nan"), float("nan"))
+
+            self.log_message(f"Starting FCS fit ({mode})...")
+            self.status_var.set("Running FCS fitting...")
+            self.progress_var.set(0.0)
+            self.progress_bar.grid()
+
+            self.fcsfit_queue = multiprocessing.Queue()
+            self.fcsfit_cancel_event = multiprocessing.Event()
+
+            params = {"mode": mode, "kwargs": kwargs}
+            if mode == "single":
+                params["kwargs"]["csv_path"] = csv_path
+            else:
+                params["folder"] = folder
+                # Optionally: restrict which CSVs to fit:
+                # params["kwargs"]["pattern"] = "*_xy_intensity_trace_correlation.csv"
+
+            self.fcsfit_proc = multiprocessing.Process(
+                target=fcsfit_process_main,
+                args=(params, self.fcsfit_queue, self.fcsfit_cancel_event),
+                daemon=False
+            )
+            self.fcsfit_proc.start()
+            self._poll_fcsfit_queue()
+
+    def update_fcs_fit_display(self, res: dict):
+        """
+        Plot into the embedded matplotlib canvas (like rics_fit) AND
+        export SVG/CSVs into Results/ next to the input file.
+        """
+        self.fcsfit_fig.clear()
+        gs = gridspec.GridSpec(2, 2, figure=self.fcsfit_fig)
+
+        fitting_model = res["fitting_model"]
+        base_path = res["base_path"]  # no ".csv"
+
+        tau = np.asarray(res["tau"], dtype=float)
+        G = np.asarray(res["G"], dtype=float)
+        sigma = np.asarray(res["sigma_G"], dtype=float)
+        pred = np.asarray(res["ccPrediction"], dtype=float)
+        wr = np.asarray(res["weighted_r"], dtype=float)
+
+        # Panel 1: correlation + fit
+        ax00 = self.fcsfit_fig.add_subplot(gs[0, 0])
+        ax00.semilogx(tau, G, "r", label="G observed")
+        ax00.semilogx(tau, pred, "g", label="G fit")
+        ax00.fill_between(tau, G - sigma, G + sigma, color="b", alpha=0.2, label="±σ")
+        ax00.set_xlabel("τ (s)")
+        ax00.set_ylabel("G(τ)")
+        ax00.legend()
+        ax00.grid(True, alpha=0.3)
+
+        # Panel 2: weighted residuals
+        ax01 = self.fcsfit_fig.add_subplot(gs[0, 1])
+        ax01.semilogx(tau, wr, "b")
+        ax01.axhline(0, color="k", lw=1, alpha=0.5)
+        ax01.set_xlabel("τ (s)")
+        ax01.set_ylabel("weighted residual")
+        ax01.grid(True, alpha=0.3)
+
+        # Panel 3: iMSD (if applicable) else loglog correlation
+        ax10 = self.fcsfit_fig.add_subplot(gs[1, 0])
+        reIMSD = None
+        if fitting_model not in ["siFCS", "siFCSTwoComponents", "g3diffMEMFCS"]:
+            aR = res.get("PSF_aspect_ratio", None)
+            N = res.get("N", None)
+            offset = res.get("offset", 0.0)
+
+            if aR is not None and N is not None:
+                reIMSD = calculate.iMSD_calc(tau, float(aR), float(N), pred, float(offset))
+                ax10.loglog(tau, reIMSD)
+                ax10.set_ylabel("iMSD")
+            else:
+                ax10.loglog(tau, G, "r", label="G observed")
+                ax10.loglog(tau, pred, "g", label="G fit")
+                ax10.set_ylabel("G(τ)")
+        else:
+            ax10.loglog(tau, G, "r", label="G observed")
+            ax10.loglog(tau, pred, "g", label="G fit")
+            ax10.set_ylabel("G(τ)")
+
+        ax10.set_xlabel("τ (s)")
+        ax10.grid(True, alpha=0.3)
+
+        # Panel 4: histogram of weighted residuals
+        ax11 = self.fcsfit_fig.add_subplot(gs[1, 1])
+        finite = np.isfinite(wr)
+        ax11.hist(wr[finite], bins=40, density=True)
+        ax11.set_xlabel("weighted residual")
+        ax11.set_ylabel("density")
+
+        self.fcsfit_fig.tight_layout()
+        self.fcsfit_canvas.draw()
+
+        # ---- EXPORTS (exactly like your old code, but GUI-controlled) ----
+        edit_path = self.fcs_make_edit_path(base_path, fitting_model)
+
+        # 1) Save SVG of the displayed figure
+        self.fcsfit_fig.savefig(edit_path + ".svg", dpi=300, bbox_inches="tight", facecolor="white")
+
+        # 2) Save fits CSV (tau, G, sigma, fit)
+        cc_fits_df = pd.DataFrame({"tau": tau, "G": G, "sigma G": sigma, "cc Fit": pred})
+        cc_fits_df.to_csv(edit_path + ".csv", header=True, index=False)
+
+        # 3) Save iMSD CSV if computed
+        if reIMSD is not None:
+            iMSD_df = pd.DataFrame({"tau": tau, "iMSD": reIMSD})
+            iMSD_df.to_csv(edit_path + "_iMSD.csv", header=True, index=False)
+
+        # 4) Append parameter summary CSV in Results/
+        summary_csv = os.path.join(os.path.dirname(edit_path), f"{fitting_model}_fit_summary.csv")
+
+        estimate = res.get("estimate_data", {})
+        # estimate is dict-of-lists; convert to a flat one-row dict
+        row = {}
+        for k, v in estimate.items():
+            if v == [None]:
+                continue
+            if isinstance(v, list) and len(v) == 1:
+                row[k] = v[0]
+            else:
+                row[k] = v
+
+        row["Filename"] = base_path
+        df = pd.DataFrame([row])
+
+        if not os.path.exists(summary_csv):
+            df.to_csv(summary_csv, header=True, index=False)
+        else:
+            df.to_csv(summary_csv, mode="a", header=False, index=False)
+
+        self.log_message(f"Saved FCS outputs to: {os.path.dirname(edit_path)}")
+
+    def fcs_make_edit_path(self, base_path: str, fitting_model: str) -> str:
+        # base_path is without ".csv"
+        edit_path = base_path + "_" + fitting_model
+        head, tail = os.path.split(edit_path)
+        results_dir = os.path.join(head, "Results")
+        os.makedirs(results_dir, exist_ok=True)
+        return os.path.join(results_dir, tail)  # without extension
+    def _poll_fcsfit_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.fcsfit_queue.get_nowait()
+
+                if msg_type == "progress":
+                    self.set_ui_busy(True)
+                    self.progress_var.set(float(payload))
+                elif msg_type == "cancelled":
+                    self.log_message("FCS fitting cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+                elif msg_type == "file_done":
+                    # payload is the per-file result dict (or wrapper dict if you kept nesting)
+                    res = payload["res"] if isinstance(payload, dict) and "res" in payload else payload
+                    self.update_fcs_fit_display(res)
+                    self.log_message(f"Finished: {res.get('base_path')}")
+
+                elif msg_type == "done":
+                    # payload is either a single-file result dict OR {"summary":..., "last_res":...} for batch
+                    if isinstance(payload, dict) and "summary" in payload and "last_res" in payload:
+                        if payload["last_res"] is not None:
+                            self.update_fcs_fit_display(payload["last_res"])
+                        self.log_message(f"Batch summary: {payload['summary']}")
+                    else:
+                        res = payload["res"] if isinstance(payload, dict) and "res" in payload else payload
+                        self.update_fcs_fit_display(res)
+
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    self.log_message("FCS fitting done.")
+                    return
+                elif msg_type == "error":
+                    self.set_ui_busy(False)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.log_message(payload)
+                    messagebox.showerror("FCS Fit Error", "FCS fitting failed. See log.")
+                    return
+
+        except queue.Empty:
+            pass
+
+        if self.fcsfit_proc is not None and not self.fcsfit_proc.is_alive():
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("FCS fit worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_fcsfit_queue)
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------Diffusion Map GUI-------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
@@ -1928,6 +2452,7 @@ class ModularRICSGUI:
             "fit_cancel_event",
             "sim_cancel_event",
             "diffmap_cancel_event",
+            "fcsfit_cancel_event",
         ):
             ev = getattr(self, ev_attr, None)
             try:
@@ -1958,11 +2483,11 @@ class ModularRICSGUI:
                 setattr(self, proc_attr, None)
 
         # 2–3) Stop any known worker processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc"):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc"):
             _stop_proc(proc_attr)
 
         # 4) Close queues properly (prevents resource_tracker semaphore warnings)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue"):
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue"):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
@@ -1980,6 +2505,7 @@ class ModularRICSGUI:
             "fit_cancel_event",
             "sim_cancel_event",
             "diffmap_cancel_event",
+            "fcsfit_cancel_event",
         ):
             setattr(self, ev_attr, None)
 
