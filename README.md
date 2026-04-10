@@ -68,6 +68,11 @@ git clone https://github.com/yusuf-qutbuddin/theatRICS.git
 cd theatRICS
 pip install -e .
 ```
+Or simply using pip (preferably in a virtual environment with Python>=3.10)
+
+```bash
+pip install theatrics 
+```
 
 ### 2. Run
 Start the GUI with:
@@ -129,10 +134,21 @@ pip install -e .
 ```
 
 ### Using conda
+
+```bash
+conda create -n theatrics python=3.11
+conda activate theatrics
+pip install theatrics
+theatrics
+```
+
+or after cloning
+
 ```bash
 conda create -n theatrics python=3.11
 conda activate theatrics
 pip install -e .
+theatrics
 ```
 
 ---
@@ -204,34 +220,34 @@ Inspect task progress, warnings, saved outputs, and session information.
 The exact set of models available in the GUI may include:
 
 ### 2D / SFCS-style models
-- `g2diff`
-- `g2diffSFCS`
-- `g2diffOffset`
-- `g2diffBlink`
-- `g2diffTwoComponents`
+- `g2diff: 2D diffusion single component`
+- `g2diffSFCS: 2D diffusion single component in XZ`
+- `g2diffOffset: 2D diffusion single component with an offset`
+- `g2diffBlink: 2D diffusion single component with blinking`
+- `g2diffTwoComponents: 2D diffusion two components`
 
 ### 3D / extended models
-- `g3diff`
-- `g3diffOffset`
-- `g3diffBlink`
-- `g3diffBlinkOffset`
-- `g3diffDoubleBlink`
-- `g3diffTwoComponents`
-- `g3diffTwoComponentsBlink`
-- `g3lorentzianZ`
-- `g3anomalousDiff`
-- `g3anomalousDiffBlink`
-- `g3diffLargeParticles`
+- `g3diff: 3D diffusion single component`
+- `g3diffOffset: 3D diffusion single component with an offset`
+- `g3diffBlink: 3D diffusion single component with blinking`
+- `g3diffBlinkOffset: 3D diffusion single component with blinking and an offset`
+- `g3diffDoubleBlink: 3D diffusion single components with double blinking`
+- `g3diffTwoComponents: 3D diffusion two components`
+- `g3diffTwoComponentsBlink: 3D diffusion two components with blinking`
+- `g3lorentzianZ: 3D diffusion single component with gaussian-lorentzian PSF`
+- `g3anomalousDiff: 3D anomalous diffusion single component`
+- `g3anomalousDiffBlink: 3D anomalous diffusion single component with blinking`
+- `g3diffLargeParticles: 3D diffusion single component of large particles with a known size`
 
 ### Calibration models
-- `g3diffCal`
-- `g3diffBlinkCal`
-- `g3lorentzianZCal`
+- `g3diffCal: 3D diffusion single component calibration`
+- `g3diffBlinkCal: 3D diffusion single component calibration with blinking`
+- `g3lorentzianZCal: 3D diffusion single component calibration for gaussian-lorentzian PSF`
 
 ### Other models
-- `siFCS`
-- `siFCSTwoComponents`
-- `g3diffMEMFCS`
+- `siFCS: siFCS model for single component diffusion`
+- `siFCSTwoComponents: siFCS model for two component diffusion`
+- `g3diffMEMFCS: 3D diffusion model with Maximum Entropy Method`
 
 ---
 
@@ -283,36 +299,24 @@ If available, the documentation includes:
 - output-file descriptions
 - troubleshooting
 
-### Build docs locally
-```bash
-pip install -r docs/requirements.txt
-sphinx-build -b html docs/source docs/build/html
-```
 
 ---
 
 ## Screenshots
-
-You can add screenshots here, for example:
-
-- main GUI overview
-- RICS fitting tab
-- FCS fitting tab
-- FRAP display
 
 Example section:
 
 ```md
 ## Screenshots
 
-### Main window
-![Main GUI](docs/images/main_gui.png)
+### RICS Export Tab
+![RICS Export](screenshots/Export_tab.png)
 
-### FRAP analysis
-![FRAP tab](docs/images/frap_tab.png)
+### RICS Fitting Tab
+![RICS Fitting](screenshots/Fitting_tab.png)
 ```
 
-If you add screenshots later, GitHub will render them nicely in the README.
+
 
 ---
 
