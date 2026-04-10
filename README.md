@@ -304,18 +304,12 @@ If available, the documentation includes:
 
 ## Screenshots
 
-Example section:
-
-```md
-## Screenshots
 
 ### RICS Export Tab
 ![RICS Export](screenshots/Export_tab.png)
 
 ### RICS Fitting Tab
 ![RICS Fitting](screenshots/Fitting_tab.png)
-```
-
 
 
 ---
