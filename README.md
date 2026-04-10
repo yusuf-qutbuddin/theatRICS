@@ -1,23 +1,405 @@
-The software is being actively developed and currently has basic functionalities available, in case of any issues please contact yusufqq@biochem.mpg.de.
+# theatRICS
 
-# Raster Image Correlation Spectroscopy simulation and analysis, and perpendicular scanning FCS analysis
-A modular, extensible graphical user interface for performing and analyzing Raster Image Correlation Spectroscopy (RICS) experiments. This toolkit supports simulation, data import/export, and advanced analysis with a user-friendly workflow designed for membrane biophysics, imaging, and fluorescence correlation studies.
-Currently the software is limited to Zeiss (.czi) files and TIFF files for the input image format for the raster scanned image. There will be a future update to involve other commonly used file types from other commercial microscope companies. 
-## Features
-**Flexible RICS simulations**: Isotropic, anisotropic, and rotated diffusion models.
+[![Documentation Status](https://readthedocs.org/projects/theatrics/badge/?version=latest)](https://theatrics.readthedocs.io/en/latest/?badge=latest)
 
-**Analysis**: Fit and analyze real or simulated image stacks. (Non-GUI batch analysis)
+**theatRICS** is a Python GUI application for quantitative fluorescence microscopy analysis, integrating multiple workflows into a single interface:
 
-**Progress monitoring**: Responsive GUI with real-time progress and status bars.
+- **RICS** — Raster Image Correlation Spectroscopy
+- **SFCS / pSFCS** — scanning / perpendicular scanning FCS
+- **FCS curve fitting**
+- **FRAP analysis**
+- **synthetic image simulation**
 
-**Modular design**: Easily extend with new simulation, import, or analysis modules.
+It is designed for practical microscopy data analysis with embedded plotting, batch processing, exportable figures, and structured numerical outputs.
 
-**Visualization**: Integrated with Matplotlib for RICS map display and fitting results.
+---
 
-## Installation and Use
+## Highlights
 
-Go to https://theatrics.readthedocs.io/en/latest/index.html for full documentation.
+- Unified GUI for multiple fluctuation-analysis workflows
+- Interactive plotting with embedded Matplotlib canvases
+- Support for **single-file** and **batch** processing
+- Export of numerical outputs and publication-quality **SVG** figures
+- Model-based fitting for correlation curves and recovery experiments
+- Session saving/loading and central logging inside the GUI
 
- ## Contributions and Authors
+---
 
- The majority of the code and functionality is developed by Yusuf Qutbuddin (yusufqq@biochem.mpg.de) and the code and the method is inspired and follows similar algorithms as the [PAM](https://gitlab.com/PAM-PIE/PAM.git) software. Some functionalities have been derived from an earlier script by Jan-Hagen Krohn. Perplexity.ai has been used for debugging, annotation and file parsing algorithms and for searching and implementing tkinter. 
+## Main capabilities
+
+## RICS
+- export correlation maps from image stacks
+- compute uncertainty maps
+- optional drift correction
+- fit diffusion models
+- generate diffusion maps
+
+## SFCS
+- correlate line-scan data
+- optional bleach correction
+- inspect intensity traces and autocorrelation curves
+
+## FCS fitting
+- fit exported correlation curves from CSV files
+- support for diffusion, blinking, offset, two-component, and calibration models
+- recursive batch fitting across subfolders
+- model-dependent initial parameter editor
+
+## FRAP
+- analyze FRAP experiments from CZI files with circular ROI annotations
+- automatic bleach-frame and control-ROI detection
+- optional imaging bleach correction
+- export raw data and summary spreadsheets
+
+## Image simulation
+- simulate isotropic and anisotropic diffusion image stacks
+- inspect outputs directly in the GUI
+- useful for benchmarking and validation
+
+---
+
+## Getting started in 2 minutes
+
+### 1. Install
+Clone the repository and install in your Python environment:
+
+```bash
+git clone https://github.com/yusuf-qutbuddin/theatRICS.git
+cd theatRICS
+pip install -e .
+```
+
+### 2. Run
+Start the GUI with:
+
+```bash
+theatrics
+```
+
+### 3. Try a workflow
+A simple first test:
+
+- open **Image Simulation**
+- generate a short synthetic image stack
+- open **RICS Export**
+- export a correlation map
+- open **RICS Fitting**
+- fit the diffusion model
+
+---
+
+## Installation
+
+## Requirements
+- Python **>= 3.10**
+- Tkinter-enabled Python installation
+- scientific Python stack
+
+### Main Python dependencies
+- `numpy`
+- `scipy`
+- `matplotlib`
+- `pandas`
+- `tifffile`
+- `scikit-image`
+- `lmfit`
+- `multipletau`
+- `statsmodels`
+- `openpyxl`
+- `sv-ttk`
+- `pylibCZIrw`
+
+## Recommended: install in a virtual environment
+
+### Using `venv`
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e .
+```
+
+On Windows:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -U pip
+pip install -e .
+```
+
+### Using conda
+```bash
+conda create -n theatrics python=3.11
+conda activate theatrics
+pip install -e .
+```
+
+---
+
+## GUI overview
+
+The main interface is organized into tabs.
+
+### Image Simulation
+Generate synthetic image stacks with user-defined diffusion and imaging parameters.
+
+### RICS Export
+Compute correlation maps and uncertainty maps from TIFF or CZI image stacks.
+
+### RICS Fitting
+Fit RICS maps using diffusion models and inspect residuals and diffusion-map outputs.
+
+### SFCS
+Perform scanning FCS correlation analysis on suitable line-scan data.
+
+### FCS Fitting
+Fit precomputed correlation curves from CSV files using a range of diffusion and blinking models.
+
+### FRAP
+Analyze photobleaching recovery data from annotated CZI files.
+
+### Results & Logs
+Inspect task progress, warnings, saved outputs, and session information.
+
+---
+
+## Typical workflows
+
+## Workflow 1 — RICS from microscopy stacks
+1. Open **RICS Export**
+2. Load a TIFF or CZI stack
+3. Export the correlation map
+4. Open **RICS Fitting**
+5. Fit the selected diffusion model
+
+## Workflow 2 — SFCS correlation
+1. Open **SFCS**
+2. Load a scanning dataset
+3. Run correlation
+4. Inspect the autocorrelation curve
+
+## Workflow 3 — FCS curve fitting
+1. Open **FCS Fitting**
+2. Select a single CSV or batch folder
+3. Choose a model
+4. Adjust model-dependent initial parameters
+5. Run the fit
+
+## Workflow 4 — FRAP
+1. Open **FRAP**
+2. Load a single CZI file or batch folder
+3. Run analysis
+4. Inspect mobile fraction, diffusion, and half-time outputs
+
+## Workflow 5 — Simulation for validation
+1. Open **Image Simulation**
+2. Define image and particle parameters
+3. Run and inspect the synthetic output
+
+---
+
+## Supported FCS fitting model families
+
+The exact set of models available in the GUI may include:
+
+### 2D / SFCS-style models
+- `g2diff`
+- `g2diffSFCS`
+- `g2diffOffset`
+- `g2diffBlink`
+- `g2diffTwoComponents`
+
+### 3D / extended models
+- `g3diff`
+- `g3diffOffset`
+- `g3diffBlink`
+- `g3diffBlinkOffset`
+- `g3diffDoubleBlink`
+- `g3diffTwoComponents`
+- `g3diffTwoComponentsBlink`
+- `g3lorentzianZ`
+- `g3anomalousDiff`
+- `g3anomalousDiffBlink`
+- `g3diffLargeParticles`
+
+### Calibration models
+- `g3diffCal`
+- `g3diffBlinkCal`
+- `g3lorentzianZCal`
+
+### Other models
+- `siFCS`
+- `siFCSTwoComponents`
+- `g3diffMEMFCS`
+
+---
+
+## Output files
+
+theatRICS writes both numerical and figure outputs.
+
+### Common output types
+- **TIFF** — correlation maps
+- **CSV** — summaries and fitted curves
+- **NPZ** — stored fit arrays
+- **SVG** — publication-quality figures
+- **XLSX** — FRAP spreadsheets
+- **JSON** — saved GUI sessions
+- **TXT** — exported logs
+
+## Examples
+
+### FCS fitting
+Per file:
+- `Results/<file>_<model>.svg`
+- `Results/<file>_<model>.csv`
+- `Results/<file>_<model>_iMSD.csv`
+
+Batch mode:
+- `Results/<model>_fit_summary.csv`
+
+### FRAP
+Per file:
+- `*_FRAP_raw_data.xlsx`
+- `*_FRAP_summary.xlsx`
+- `*_FRAP_overview.svg`
+
+### RICS
+Typical outputs:
+- `*_RICScorr.tif`
+- `*_RICSunc.tif`
+
+---
+
+## Documentation
+
+Project documentation is intended to be hosted on **Read the Docs**.
+
+If available, the documentation includes:
+- installation instructions
+- GUI overview
+- workflow guides
+- output-file descriptions
+- troubleshooting
+
+### Build docs locally
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -b html docs/source docs/build/html
+```
+
+---
+
+## Screenshots
+
+You can add screenshots here, for example:
+
+- main GUI overview
+- RICS fitting tab
+- FCS fitting tab
+- FRAP display
+
+Example section:
+
+```md
+## Screenshots
+
+### Main window
+![Main GUI](docs/images/main_gui.png)
+
+### FRAP analysis
+![FRAP tab](docs/images/frap_tab.png)
+```
+
+If you add screenshots later, GitHub will render them nicely in the README.
+
+---
+
+## Project structure
+
+A typical layout is:
+
+```text
+src/
+  theatrics/
+    main.py
+    gui_app.py
+    workers/
+    fcsfit/
+    frap/
+docs/
+pyproject.toml
+.readthedocs.yaml
+```
+
+---
+
+## Development notes
+
+theatRICS uses:
+- **Tkinter** for the GUI
+- **Matplotlib** for embedded plotting
+- **multiprocessing** for long-running tasks
+- worker queues for progress reporting and cancellation
+
+This keeps computational workflows separated from the GUI while still allowing interactive progress monitoring.
+
+---
+
+## Troubleshooting
+
+## GUI does not start
+Check:
+- Tkinter is installed
+- the correct Python environment is active
+- all required packages are installed
+
+## CZI workflows fail
+Make sure:
+- `pylibCZIrw` is installed and importable
+- the CZI file contains valid metadata
+
+## FCS batch mode finds no files
+Check the file pattern, for example:
+
+```text
+*_xy_intensity_trace_correlation.csv
+```
+
+## FRAP fails because of missing ROIs
+The FRAP workflow requires circular ROI annotations in the CZI metadata.
+
+## Batch processing feels slow or unresponsive
+Large batches can reduce GUI responsiveness if figures are redrawn too often. A common strategy is to update progress continuously and update the full display only for the latest or final file.
+
+---
+
+## Contributing
+
+Contributions, bug reports, and suggestions are welcome.
+
+When reporting issues, please include:
+- operating system
+- Python version
+- theatRICS version
+- traceback or error message
+- a description of the input file type
+- whether the issue occurs in single-file or batch mode
+
+---
+
+## Author
+
+**Yusuf Qutbuddin**
+
+---
+
+## Contributors
+
+The majority of the code and functionality is developed by Yusuf Qutbuddin (yusufqq@biochem.mpg.de) and the code and the method is inspired and follows similar algorithms as the [PAM](https://gitlab.com/PAM-PIE/PAM.git) software. Some functionalities have been derived from an earlier script by Jan-Hagen Krohn and the FRAP analysis has been contributed by Marco Halbeisen. Perplexity.ai and ChatGPT 5.2 has been used for debugging, annotation and file parsing algorithms and for searching and implementing tkinter.
+---
+
+## License
+
+See the `LICENSE` file in this repository.
