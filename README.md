@@ -286,18 +286,6 @@ Typical outputs:
 - `*_RICScorr.tif`
 - `*_RICSunc.tif`
 
----
-
-## Documentation
-
-Project documentation is intended to be hosted on **Read the Docs**.
-
-If available, the documentation includes:
-- installation instructions
-- GUI overview
-- workflow guides
-- output-file descriptions
-- troubleshooting
 
 
 ---
