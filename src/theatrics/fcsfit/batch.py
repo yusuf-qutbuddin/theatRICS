@@ -5,7 +5,7 @@ import glob
 import traceback
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
-
+import pandas as pd
 from theatrics.fcsfit import models_and_fit as fit
 
 
@@ -95,21 +95,35 @@ def run_single_csv(
     return res
 
 
-def run_batch_folder(folder: str, pattern="*.csv", progress_queue=None, cancel_event=None, **kwargs) -> dict:
+def run_batch_folder(
+    folder: str,
+    pattern: str = "*.csv",
+    progress_queue=None,
+    cancel_event=None,
+    **kwargs
+) -> dict:
     """
-    Find CSVs recursively in folder and fit each.
+    Recursively find matching CSV files in all subfolders of `folder`,
+    fit them all, and write one summary CSV in the OUTER folder.
 
-    Returns a dict with:
-      - summary: BatchSummary as dict
-      - last_res: last successful per-file result dict (or None)
-    Also sends per-file results through progress_queue as ("file_done", res).
+    Per-file outputs are still handled locally by the GUI display/export
+    if desired, while the batch summary is written once here.
     """
     csvs = sorted(glob.glob(os.path.join(folder, "**", pattern), recursive=True))
-    n_ok = 0
-    failed: List[str] = []
-    last_res = None
 
     n_total = len(csvs)
+    n_ok = 0
+    failed = []
+    last_res = None
+    summary_rows = []
+
+    # one global summary in the outer folder
+    outer_results_dir = os.path.join(folder, "Results")
+    os.makedirs(outer_results_dir, exist_ok=True)
+
+    fitting_model = kwargs["fitting_model"]
+    summary_csv = os.path.join(outer_results_dir, f"{pattern}_{fitting_model}_fit_summary.csv")
+
     if progress_queue is not None:
         progress_queue.put(("progress", 0.0))
 
@@ -122,10 +136,22 @@ def run_batch_folder(folder: str, pattern="*.csv", progress_queue=None, cancel_e
             last_res = res
             n_ok += 1
 
+            # flatten estimate_data into one summary row
+            estimate = res.get("estimate_data", {})
+            row = {}
+            for k, v in estimate.items():
+                if v == [None]:
+                    continue
+                if isinstance(v, list) and len(v) == 1:
+                    row[k] = v[0]
+                else:
+                    row[k] = v
+
+            row["Filename"] = res.get("base_path", csv_path)
+            summary_rows.append(row)
+
             if progress_queue is not None:
-                # per-file result for GUI display/export
                 progress_queue.put(("file_done", res))
-                # overall progress
                 progress_queue.put(("progress", 100.0 * (i + 1) / max(1, n_total)))
 
         except Exception:
@@ -133,6 +159,19 @@ def run_batch_folder(folder: str, pattern="*.csv", progress_queue=None, cancel_e
             if progress_queue is not None:
                 progress_queue.put(("progress", 100.0 * (i + 1) / max(1, n_total)))
 
-    summary = BatchSummary(n_total=n_total, n_ok=n_ok, n_failed=len(failed), failed=failed)
+    if summary_rows:
+        df = pd.DataFrame(summary_rows)
+        df.to_csv(summary_csv, index=False)
+    else:
+        summary_csv = None
 
-    return {"summary": summary.__dict__, "last_res": last_res}
+    return {
+        "summary": {
+            "n_total": n_total,
+            "n_ok": n_ok,
+            "n_failed": len(failed),
+            "failed": failed,
+            "summary_csv": summary_csv,
+        },
+        "last_res": last_res,
+    }

@@ -1,19 +1,18 @@
 from __future__ import annotations
 import traceback
 
-from theatrics.fcsfit import batch as fcs_batch
+from theatrics.frap import analysis as frap_analysis
 
 
-def fcsfit_process_main(params, out_queue, cancel_event):
+def frap_process_main(params, out_queue, cancel_event):
     try:
         mode = params["mode"]
+        config = params.get("config", None)
+
         out_queue.put(("progress", 0.0))
 
         if mode == "single":
-            res = fcs_batch.run_single_csv(
-                cancel_event=cancel_event,
-                **params["kwargs"]
-            )
+            res = frap_analysis.analyse_frap(params["czi_path"], config=config)
             if cancel_event.is_set():
                 out_queue.put(("cancelled", None))
                 return
@@ -21,18 +20,17 @@ def fcsfit_process_main(params, out_queue, cancel_event):
             return
 
         if mode == "batch":
-            folder = params["folder"]
-            batch_out = fcs_batch.run_batch_folder(
-                folder=folder,
-                pattern=params.get("pattern", "*.csv"),
+            res = frap_analysis.run_frap_batch(
+                folder=params["folder"],
+                pattern=params.get("pattern", "*FRAP*.czi"),
+                config=config,
                 progress_queue=out_queue,
                 cancel_event=cancel_event,
-                **params["kwargs"],
             )
             if cancel_event.is_set():
                 out_queue.put(("cancelled", None))
                 return
-            out_queue.put(("done", batch_out))
+            out_queue.put(("done", res))
             return
 
         raise ValueError(f"Unknown mode: {mode}")

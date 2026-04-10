@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import sv_ttk
 import numpy as np
+from path import Path
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
@@ -33,10 +34,12 @@ from theatrics.workers.fit_worker import fit_rics_process_main
 from theatrics.workers.sim_worker import simulate_rics_process_main
 from theatrics.workers.diffmap_worker import diffusion_map_process_main
 from theatrics.workers.fcsfit_worker import fcsfit_process_main
+from theatrics.workers.frap_worker import frap_process_main
 
 from theatrics.fcsfit import calculations as calculate
 from theatrics.utils.file_utils import get_files_from_folder
 from theatrics.utils.mp_utils import clamp_workers
+from theatrics.frap import analysis as frap_analysis
 
 
 
@@ -103,6 +106,7 @@ class ModularRICSGUI:
         self.create_fitting_tab()
         self.create_SFCS_tab()
         self.create_fcs_fit_tab()
+        self.create_frap_tab()
         self.create_results_tab()
 
 
@@ -430,6 +434,13 @@ class ModularRICSGUI:
         self.register_busy_widget(e2)
         self.register_busy_widget(b2)
 
+
+        row += 1
+        ttk.Label(params_frame, text="Batch file pattern:").grid(row=row, column=0, sticky="w")
+        self.fcsfit_pattern = tk.StringVar(value="*_ACF_ch0_ar_bg.csv")
+        pattern_entry = ttk.Entry(params_frame, textvariable=self.fcsfit_pattern, width=28)
+        pattern_entry.grid(row=row, column=1, sticky="ew")
+        self.register_busy_widget(pattern_entry)
         row += 1
         ttk.Label(params_frame, text="Model:").grid(row=row, column=0, sticky="w")
         self.fcsfit_model = tk.StringVar(value="g3diffCal")
@@ -580,6 +591,97 @@ class ModularRICSGUI:
         folder = filedialog.askdirectory(title="Select folder containing correlation CSVs")
         if folder:
             self.fcsfit_folder.set(folder)
+
+    def create_frap_tab(self):
+        frap_frame = ttk.Frame(self.notebook)
+        self.notebook.add(frap_frame, text="FRAP")
+
+        params_frame = ttk.LabelFrame(frap_frame, text="FRAP Parameters", padding=10)
+        params_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        row = 0
+        ttk.Label(params_frame, text="Single CZI:").grid(row=row, column=0, sticky="w")
+        self.frap_czi = tk.StringVar()
+        e1 = ttk.Entry(params_frame, textvariable=self.frap_czi, width=28)
+        e1.grid(row=row, column=1, sticky="ew")
+        b1 = ttk.Button(params_frame, text="Browse", command=self.browse_frap_czi)
+        b1.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e1)
+        self.register_busy_widget(b1)
+
+        row += 1
+        ttk.Label(params_frame, text="Batch folder:").grid(row=row, column=0, sticky="w")
+        self.frap_folder = tk.StringVar()
+        e2 = ttk.Entry(params_frame, textvariable=self.frap_folder, width=28)
+        e2.grid(row=row, column=1, sticky="ew")
+        b2 = ttk.Button(params_frame, text="Browse", command=self.browse_frap_folder)
+        b2.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e2)
+        self.register_busy_widget(b2)
+
+        row += 1
+        ttk.Label(params_frame, text="Pattern:").grid(row=row, column=0, sticky="w")
+        self.frap_pattern = tk.StringVar(value="*FRAP*.czi")
+        ttk.Entry(params_frame, textvariable=self.frap_pattern, width=18).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        self.frap_imaging_bleach = tk.BooleanVar(value=True)
+        ttk.Checkbutton(params_frame, text="Imaging bleach correction", variable=self.frap_imaging_bleach).grid(
+            row=row, column=0, columnspan=2, sticky="w"
+        )
+
+        row += 1
+        ttk.Label(params_frame, text="Fallback pixel size (µm):").grid(row=row, column=0, sticky="w")
+        self.frap_pixel_size = tk.StringVar(value="")
+        ttk.Entry(params_frame, textvariable=self.frap_pixel_size, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Initial D (px²/frame):").grid(row=row, column=0, sticky="w")
+        self.frap_init_D = tk.StringVar(value="200")
+        ttk.Entry(params_frame, textvariable=self.frap_init_D, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="D lower bound:").grid(row=row, column=0, sticky="w")
+        self.frap_D_lb = tk.StringVar(value="100")
+        ttk.Entry(params_frame, textvariable=self.frap_D_lb, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="D upper bound:").grid(row=row, column=0, sticky="w")
+        self.frap_D_ub = tk.StringVar(value="1000")
+        ttk.Entry(params_frame, textvariable=self.frap_D_ub, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        btn_frame = ttk.Frame(params_frame)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+
+        self.frap_run_btn = ttk.Button(btn_frame, text="Run FRAP", command=self.run_frap)
+        self.frap_run_btn.pack(side=tk.LEFT, padx=5)
+        self.register_busy_widget(self.frap_run_btn)
+
+        display_frame = ttk.LabelFrame(frap_frame, text="FRAP Display", padding=10)
+        display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.frap_fig = Figure(figsize=(9, 7), dpi=100, facecolor="white")
+        self.frap_canvas = FigureCanvasTkAgg(self.frap_fig, display_frame)
+        self.frap_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(self.frap_canvas, display_frame)
+        toolbar.update()
+
+
+    def browse_frap_czi(self):
+        fn = filedialog.askopenfilename(
+            title="Select FRAP CZI file",
+            filetypes=[("CZI files", "*.czi"), ("All files", "*.*")]
+        )
+        if fn:
+            self.frap_czi.set(fn)
+
+
+    def browse_frap_folder(self):
+        folder = filedialog.askdirectory(title="Select FRAP batch folder")
+        if folder:
+            self.frap_folder.set(folder)
+
 
     
 
@@ -1935,87 +2037,86 @@ class ModularRICSGUI:
         }
 
     def run_fcsfit(self):
-            # Decide mode
-            csv_path = self.fcsfit_csv.get().strip()
-            folder = self.fcsfit_folder.get().strip()
+        csv_path = self.fcsfit_csv.get().strip()
+        folder = self.fcsfit_folder.get().strip()
 
-            if not csv_path and not folder:
-                messagebox.showwarning("Warning", "Select a single CSV or a batch folder.")
-                return
+        if not csv_path and not folder:
+            messagebox.showwarning("Warning", "Select a single CSV or a batch folder.")
+            return
 
-            mode = "single" if csv_path else "batch"
+        mode = "single" if csv_path else "batch"
 
-            tau_min = float(self.fcsfit_tau_min.get())
-            tau_max = float(self.fcsfit_tau_max.get())
+        tau_min = float(self.fcsfit_tau_min.get())
+        tau_max = float(self.fcsfit_tau_max.get())
 
-            initial_params = dict(self.fcs_default_initial_params())
+        initial_params = dict(self.fcs_default_initial_params())
 
-            # apply only current visible keys as overrides
-            for key, var in self.fcs_param_vars.items():
-                val = self._parse_param_value(var.get())
-                if val is not None:
-                    initial_params[key] = val
+        # apply only currently visible editor values
+        for key, var in self.fcs_param_vars.items():
+            val = self._parse_param_value(var.get())
+            if val is not None:
+                initial_params[key] = val
 
-            # compatibility mapping
-            # Provide BOTH keys so legacy code works regardless of which one it expects
-            if "F_Blink" in initial_params and "F_B" not in initial_params:
-                initial_params["F_B"] = initial_params["F_Blink"]
-            if "F_B" in initial_params and "F_Blink" not in initial_params:
-                initial_params["F_Blink"] = initial_params["F_B"]
-            if "dTauD" in initial_params and "sigma tau diffusion" not in initial_params:
-                initial_params["sigma tau diffusion"] = initial_params["dTauD"]
+        # compatibility for legacy code
+        if "F_Blink" in initial_params and "F_B" not in initial_params:
+            initial_params["F_B"] = initial_params["F_Blink"]
+        if "F_B" in initial_params and "F_Blink" not in initial_params:
+            initial_params["F_Blink"] = initial_params["F_B"]
 
-            model = self.fcsfit_model.get()
-            is_cal = "Cal" in model
+        model = self.fcsfit_model.get()
 
-            kwargs = dict(
-                fitting_model=model,
-                tau_domain=(tau_min, tau_max),
-                user_tau_domain=True,
-                psf_radius_um=float(self.fcsfit_psf_radius.get()),
-                psf_aspect_ratio=float(self.fcsfit_psf_ar.get()),
-                experiment_T=float(self.fcsfit_expt_T.get()),
-                BG_value=0.0,
-                user_initial_params=True,
-                initial_params=initial_params,
-                goodness_of_fit_criterion=["instant_correlation_runsstest"],
-                figure_display_delay=0.001,
+        kwargs = dict(
+            fitting_model=model,
+            tau_domain=(tau_min, tau_max),
+            user_tau_domain=True,
+            psf_radius_um=float(self.fcsfit_psf_radius.get()),
+            psf_aspect_ratio=float(self.fcsfit_psf_ar.get()),
+            experiment_T=float(self.fcsfit_expt_T.get()),
+            BG_value=0.0,
+            user_initial_params=True,
+            initial_params=initial_params,
+            goodness_of_fit_criterion=["instant_correlation_runsstest"],
+            figure_display_delay=0.001,
+        )
+
+        # Calibration models only
+        if "Cal" in model:
+            kwargs["given_D"] = (
+                float(self.fcsfit_givenD.get()),
+                float(self.fcsfit_givenD_T.get())
             )
+        else:
+            # still provide a harmless default so downstream code won't fail
+            kwargs["given_D"] = (435.0, 25.0)
 
-            if is_cal:
-                kwargs["given_D"] = (float(self.fcsfit_givenD.get()), float(self.fcsfit_givenD_T.get()))
-            else:
-                # optional: still provide something, but it won't be used
-                kwargs["given_D"] = (float("nan"), float("nan"))
+        self.log_message(f"Starting FCS fit ({mode})...")
+        self.status_var.set("Running FCS fitting...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
 
-            self.log_message(f"Starting FCS fit ({mode})...")
-            self.status_var.set("Running FCS fitting...")
-            self.progress_var.set(0.0)
-            self.progress_bar.grid()
+        self.fcsfit_queue = multiprocessing.Queue()
+        self.fcsfit_cancel_event = multiprocessing.Event()
 
-            self.fcsfit_queue = multiprocessing.Queue()
-            self.fcsfit_cancel_event = multiprocessing.Event()
+        params = {"mode": mode, "kwargs": kwargs}
+        if mode == "single":
+            params["kwargs"]["csv_path"] = csv_path
+        else:
+            params["folder"] = folder
+            params["pattern"] = self.fcsfit_pattern.get().strip()
 
-            params = {"mode": mode, "kwargs": kwargs}
-            if mode == "single":
-                params["kwargs"]["csv_path"] = csv_path
-            else:
-                params["folder"] = folder
-                # Optionally: restrict which CSVs to fit:
-                # params["kwargs"]["pattern"] = "*_xy_intensity_trace_correlation.csv"
-
-            self.fcsfit_proc = multiprocessing.Process(
-                target=fcsfit_process_main,
-                args=(params, self.fcsfit_queue, self.fcsfit_cancel_event),
-                daemon=False
-            )
-            self.fcsfit_proc.start()
-            self._poll_fcsfit_queue()
-
-    def update_fcs_fit_display(self, res: dict):
+        self.fcsfit_proc = multiprocessing.Process(
+            target=fcsfit_process_main,
+            args=(params, self.fcsfit_queue, self.fcsfit_cancel_event),
+            daemon=False
+        )
+        self.fcsfit_proc.start()
+        self._poll_fcsfit_queue()
+    def update_fcs_fit_display(self, res: dict, write_summary: bool = True):
         """
         Plot into the embedded matplotlib canvas (like rics_fit) AND
         export SVG/CSVs into Results/ next to the input file.
+
+        If write_summary=False, only per-file outputs are written, not the summary CSV.
         """
         self.fcsfit_fig.clear()
         gs = gridspec.GridSpec(2, 2, figure=self.fcsfit_fig)
@@ -2029,7 +2130,6 @@ class ModularRICSGUI:
         pred = np.asarray(res["ccPrediction"], dtype=float)
         wr = np.asarray(res["weighted_r"], dtype=float)
 
-        # Panel 1: correlation + fit
         ax00 = self.fcsfit_fig.add_subplot(gs[0, 0])
         ax00.semilogx(tau, G, "r", label="G observed")
         ax00.semilogx(tau, pred, "g", label="G fit")
@@ -2039,7 +2139,6 @@ class ModularRICSGUI:
         ax00.legend()
         ax00.grid(True, alpha=0.3)
 
-        # Panel 2: weighted residuals
         ax01 = self.fcsfit_fig.add_subplot(gs[0, 1])
         ax01.semilogx(tau, wr, "b")
         ax01.axhline(0, color="k", lw=1, alpha=0.5)
@@ -2047,7 +2146,6 @@ class ModularRICSGUI:
         ax01.set_ylabel("weighted residual")
         ax01.grid(True, alpha=0.3)
 
-        # Panel 3: iMSD (if applicable) else loglog correlation
         ax10 = self.fcsfit_fig.add_subplot(gs[1, 0])
         reIMSD = None
         if fitting_model not in ["siFCS", "siFCSTwoComponents", "g3diffMEMFCS"]:
@@ -2071,7 +2169,6 @@ class ModularRICSGUI:
         ax10.set_xlabel("τ (s)")
         ax10.grid(True, alpha=0.3)
 
-        # Panel 4: histogram of weighted residuals
         ax11 = self.fcsfit_fig.add_subplot(gs[1, 1])
         finite = np.isfinite(wr)
         ax11.hist(wr[finite], bins=40, density=True)
@@ -2081,42 +2178,37 @@ class ModularRICSGUI:
         self.fcsfit_fig.tight_layout()
         self.fcsfit_canvas.draw()
 
-        # ---- EXPORTS (exactly like your old code, but GUI-controlled) ----
+        # per-file outputs next to each file
         edit_path = self.fcs_make_edit_path(base_path, fitting_model)
 
-        # 1) Save SVG of the displayed figure
         self.fcsfit_fig.savefig(edit_path + ".svg", dpi=300, bbox_inches="tight", facecolor="white")
 
-        # 2) Save fits CSV (tau, G, sigma, fit)
         cc_fits_df = pd.DataFrame({"tau": tau, "G": G, "sigma G": sigma, "cc Fit": pred})
         cc_fits_df.to_csv(edit_path + ".csv", header=True, index=False)
 
-        # 3) Save iMSD CSV if computed
         if reIMSD is not None:
             iMSD_df = pd.DataFrame({"tau": tau, "iMSD": reIMSD})
             iMSD_df.to_csv(edit_path + "_iMSD.csv", header=True, index=False)
 
-        # 4) Append parameter summary CSV in Results/
-        summary_csv = os.path.join(os.path.dirname(edit_path), f"{fitting_model}_fit_summary.csv")
+        if write_summary:
+            summary_csv = os.path.join(os.path.dirname(edit_path), f"{fitting_model}_fit_summary.csv")
+            estimate = res.get("estimate_data", {})
+            row = {}
+            for k, v in estimate.items():
+                if v == [None]:
+                    continue
+                if isinstance(v, list) and len(v) == 1:
+                    row[k] = v[0]
+                else:
+                    row[k] = v
 
-        estimate = res.get("estimate_data", {})
-        # estimate is dict-of-lists; convert to a flat one-row dict
-        row = {}
-        for k, v in estimate.items():
-            if v == [None]:
-                continue
-            if isinstance(v, list) and len(v) == 1:
-                row[k] = v[0]
+            row["Filename"] = base_path
+            df = pd.DataFrame([row])
+
+            if not os.path.exists(summary_csv):
+                df.to_csv(summary_csv, header=True, index=False)
             else:
-                row[k] = v
-
-        row["Filename"] = base_path
-        df = pd.DataFrame([row])
-
-        if not os.path.exists(summary_csv):
-            df.to_csv(summary_csv, header=True, index=False)
-        else:
-            df.to_csv(summary_csv, mode="a", header=False, index=False)
+                df.to_csv(summary_csv, mode="a", header=False, index=False)
 
         self.log_message(f"Saved FCS outputs to: {os.path.dirname(edit_path)}")
 
@@ -2135,33 +2227,40 @@ class ModularRICSGUI:
                 if msg_type == "progress":
                     self.set_ui_busy(True)
                     self.progress_var.set(float(payload))
+
                 elif msg_type == "cancelled":
                     self.log_message("FCS fitting cancelled.")
                     self.status_var.set("Cancelled")
                     self.progress_bar.grid_remove()
                     self.set_ui_busy(False)
                     return
+
                 elif msg_type == "file_done":
-                    # payload is the per-file result dict (or wrapper dict if you kept nesting)
                     res = payload["res"] if isinstance(payload, dict) and "res" in payload else payload
-                    self.update_fcs_fit_display(res)
                     self.log_message(f"Finished: {res.get('base_path')}")
 
                 elif msg_type == "done":
-                    # payload is either a single-file result dict OR {"summary":..., "last_res":...} for batch
+                    # batch payload
                     if isinstance(payload, dict) and "summary" in payload and "last_res" in payload:
                         if payload["last_res"] is not None:
-                            self.update_fcs_fit_display(payload["last_res"])
-                        self.log_message(f"Batch summary: {payload['summary']}")
+                            self.update_fcs_fit_display(payload["last_res"], write_summary=False)
+
+                        summary = payload["summary"]
+                        self.log_message(f"Batch summary CSV: {summary.get('summary_csv')}")
+                        self.log_message(f"Processed {summary.get('n_ok')}/{summary.get('n_total')} files")
+                        if summary.get("n_failed", 0) > 0:
+                            self.log_message(f"Failed files: {summary.get('failed')}")
                     else:
+                        # single-file payload
                         res = payload["res"] if isinstance(payload, dict) and "res" in payload else payload
-                        self.update_fcs_fit_display(res)
+                        self.update_fcs_fit_display(res, write_summary=True)
 
                     self.set_ui_busy(False)
                     self.status_var.set("Ready")
                     self.progress_bar.grid_remove()
                     self.log_message("FCS fitting done.")
                     return
+
                 elif msg_type == "error":
                     self.set_ui_busy(False)
                     self.status_var.set("Error")
@@ -2181,6 +2280,261 @@ class ModularRICSGUI:
             return
 
         self.root.after(50, self._poll_fcsfit_queue)
+
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------FRAP GUI-------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
+
+
+
+    def run_frap(self):
+        czi_path = self.frap_czi.get().strip()
+        folder = self.frap_folder.get().strip()
+
+        if not czi_path and not folder:
+            messagebox.showwarning("Warning", "Select a single CZI or a batch folder.")
+            return
+
+        mode = "single" if czi_path else "batch"
+
+        px_text = self.frap_pixel_size.get().strip()
+        pixel_size_um = float(px_text) if px_text else None
+
+        config = {
+            "frap_pattern": self.frap_pattern.get(),
+            "pixel_size_um": pixel_size_um,
+            "imaging_bleach": bool(self.frap_imaging_bleach.get()),
+            "init": {
+                "F_0": None,
+                "f_bl": None,
+                "f_mob": None,
+                "D": float(self.frap_init_D.get()),
+                "t_b": None,
+            },
+            "bounds": {
+                "F_0": [0, None],
+                "f_bl": [0, 1.0],
+                "f_mob": [0, 1.2],
+                "D": [float(self.frap_D_lb.get()), float(self.frap_D_ub.get())],
+                "t_b": [None, None],
+            },
+            "d_search_decades": 3,
+            "outlier_z": 3.5,
+        }
+
+        self.log_message(f"Starting FRAP ({mode})...")
+        self.status_var.set("Running FRAP...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        self.frap_queue = multiprocessing.Queue()
+        self.frap_cancel_event = multiprocessing.Event()
+
+        params = {"mode": mode, "config": config}
+        if mode == "single":
+            params["czi_path"] = czi_path
+        else:
+            params["folder"] = folder
+            params["pattern"] = self.frap_pattern.get()
+
+        self.frap_proc = multiprocessing.Process(
+            target=frap_process_main,
+            args=(params, self.frap_queue, self.frap_cancel_event),
+            daemon=False
+        )
+        self.frap_proc.start()
+        self._poll_frap_queue()
+
+
+    def update_frap_display(self, res: dict):
+        from matplotlib import gridspec
+
+        self.frap_fig.clear()
+        gs = gridspec.GridSpec(2, 2, figure=self.frap_fig, hspace=0.44, wspace=0.33,
+                               left=0.08, right=0.97, top=0.93, bottom=0.09)
+
+        axA = self.frap_fig.add_subplot(gs[0, 0])
+        axB = self.frap_fig.add_subplot(gs[0, 1])
+        axC = self.frap_fig.add_subplot(gs[1, 0])
+        axD = self.frap_fig.add_subplot(gs[1, 1])
+
+        stem = res["stem"]
+        t_all = np.asarray(res["t_all"], dtype=float)
+        dt = float(res["dt"])
+        bleach_frame = int(res["bleach_frame"])
+        raw_traces = [np.asarray(x, dtype=float) for x in res["raw_traces"]]
+        norm_traces = [np.asarray(x, dtype=float) for x in res["norm_traces"]]
+        ctrl_idx = int(res["ctrl_idx"])
+        frap_idxs = list(res["frap_idxs"])
+        fit_results = res["fit_results"]
+        colors = res["roi_colors"]
+        imaging_bleach = bool(res["imaging_bleach"])
+
+        tb_s = bleach_frame * dt
+        T = t_all[-1] - t_all[0]
+
+        self.frap_fig.suptitle(
+            f"{stem}   [{' + imaging bleach' if imaging_bleach else 'no imaging bleach'}]",
+            fontsize=12, fontweight='bold', color='#1A1A2E', y=0.99
+        )
+
+        def _style(ax, title, xl, yl):
+            ax.spines[['top', 'right']].set_visible(False)
+            ax.tick_params(labelsize=9)
+            ax.set_title(title, fontsize=11, fontweight='bold', pad=7, color='#1A1A2E')
+            ax.set_xlabel(xl, fontsize=10)
+            ax.set_ylabel(yl, fontsize=10)
+
+        def _vline(ax):
+            ax.axvline(tb_s, color='#BBBBBB', lw=1.0, ls='--', zorder=0)
+            yl = ax.get_ylim()
+            ax.text(tb_s + T * 0.01, yl[1] * 0.98, 'bleach',
+                    fontsize=7, color='#999999', va='top')
+
+        _style(axA, 'Raw intensity (pre-normalisation)', 'Time [s]', 'Mean intensity [counts]')
+        axA.plot(t_all, raw_traces[ctrl_idx], color='#AAAAAA', lw=1.5, ls='--',
+                 label=f'ROI {ctrl_idx+1} — control')
+        for k, fi in enumerate(frap_idxs):
+            axA.plot(t_all, raw_traces[fi], color=colors[k], lw=2, label=f'ROI {fi+1} — FRAP')
+        axA.autoscale(axis='y')
+        _vline(axA)
+        axA.legend(fontsize=8, frameon=False)
+
+        _style(axB, 'Normalised fit', 'Time [s]', 'Normalised intensity [counts]')
+        xs = np.linspace(0, len(t_all) - 1, 1000)
+        ts = xs * dt
+        for k, fi in enumerate(frap_idxs):
+            if fit_results[k] is None:
+                continue
+            popt = fit_results[k][0]
+            axB.plot(t_all, norm_traces[fi], 'o', color=colors[k], ms=2.5, alpha=0.35)
+            axB.plot(ts, frap_analysis.evaluate_model(xs, popt, imaging_bleach), '-', color=colors[k], lw=2.2,
+                     label=(f'ROI {fi+1}: Mobile fraction={popt[4]:.2f}, '
+                            f't½={fit_results[k][2]:.2f} s'))
+            if imaging_bleach:
+                F_0, t_b = popt[2], popt[6]
+                axB.plot(ts, F_0 * np.exp(-xs / t_b), ':', color=colors[k], lw=1.1, alpha=0.5)
+        axB.autoscale(axis='y')
+        _vline(axB)
+        axB.legend(fontsize=8, frameon=False)
+
+        _style(axC, 'Bleach corrected Fit', 'Time [s]', 'Intensity [counts]')
+        x_rel = np.linspace(0.01, len(t_all) - 1 - bleach_frame, 600)
+        t_rel = x_rel * dt
+        x_abs = x_rel + bleach_frame
+
+        for k, fi in enumerate(frap_idxs):
+            if fit_results[k] is None:
+                continue
+            popt = fit_results[k][0]
+            x_0f, R_f, F_0f, f_bl_f, f_mob_f, D_f = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
+            t_b_f = popt[6] if imaging_bleach else np.inf
+
+            post_idx = np.arange(bleach_frame, len(t_all), dtype=float)
+            t_post = (post_idx - bleach_frame) * dt
+            raw_post = norm_traces[fi][bleach_frame:].astype(float)
+            ib_post = F_0f * np.exp(-post_idx / t_b_f)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                corr = (raw_post / (ib_post + 1e-9) - (1.0 - f_bl_f)) / (f_bl_f + 1e-9)
+
+            axC.plot(t_post, np.clip(corr, -0.3, f_mob_f * 1.4), 'o', color=colors[k], ms=2.5, alpha=0.4)
+
+            S_fit = frap_analysis._soumpasis(x_abs, x_0f, R_f, D_f)
+            axC.plot(t_rel, f_mob_f * S_fit, '-', color=colors[k], lw=2.2,
+                     label=(f'ROI {fi+1}: Mobile fraction={f_mob_f:.2f}, '
+                            f'f_bl={f_bl_f:.2f}, t½={fit_results[k][2]:.2f} s'))
+            axC.axhline(f_mob_f, color=colors[k], lw=0.8, ls='--', alpha=0.45)
+            axC.axvline(fit_results[k][2], color=colors[k], lw=0.8, ls=':', alpha=0.65)
+
+        axC.set_xlim(left=0)
+        max_fm = max((fit_results[k][0][4] for k in range(len(frap_idxs)) if fit_results[k] is not None), default=1.0)
+        axC.set_ylim(-0.3, max_fm * 1.3)
+        axC.legend(fontsize=8, frameon=False)
+
+        _style(axD, 'Fit residuals', 'Time since bleach (s)', 'Residuals')
+        axD.axhline(0, color='#888888', lw=1.0)
+        all_r = []
+        for k, fi in enumerate(frap_idxs):
+            if fit_results[k] is None:
+                continue
+            popt = fit_results[k][0]
+            post_i = np.arange(bleach_frame, len(t_all), dtype=float)
+            t_post = (post_i - bleach_frame) * dt
+            pre_mu = float(np.nanmean(norm_traces[fi][:bleach_frame])) + 1e-9
+            resid = (norm_traces[fi][bleach_frame:].astype(float) - frap_analysis.evaluate_model(post_i, popt, imaging_bleach)) / pre_mu
+            all_r.extend(resid.tolist())
+            win = max(3, len(resid) // 15)
+            if len(resid) > win * 2:
+                rm = np.convolve(resid, np.ones(win) / win, mode='valid')
+                axD.plot(t_post[win // 2: win // 2 + len(rm)], rm, '-', color=colors[k], lw=1.8, label=f'ROI {fi+1}')
+
+        axD.set_xlim(left=0)
+        ylim = max(0.12, np.percentile(np.abs(all_r), 99) * 1.3) if all_r else 0.12
+        axD.set_ylim(-ylim, ylim)
+        axD.legend(fontsize=8, frameon=False)
+
+        self.frap_canvas.draw()
+
+        # save SVG from GUI figure only
+        czi_path = Path(res["czi_path"])
+        svg_path = czi_path.with_name(czi_path.stem + "_FRAP_overview.svg")
+        self.frap_fig.savefig(svg_path, dpi=300, bbox_inches='tight', facecolor='white')
+        self.log_message(f"Saved FRAP SVG: {svg_path}")
+
+
+    def _poll_frap_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.frap_queue.get_nowait()
+
+                if msg_type == "progress":
+                    self.set_ui_busy(True)
+                    self.progress_var.set(float(payload))
+
+                elif msg_type == "cancelled":
+                    self.log_message("FRAP cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "file_done":
+                    self.update_frap_display(payload)
+                    self.log_message(f"Finished FRAP: {payload.get('czi_path')}")
+
+                elif msg_type == "done":
+                    if isinstance(payload, dict) and "last_res" in payload:
+                        if payload["last_res"] is not None:
+                            self.update_frap_display(payload["last_res"])
+                        self.log_message(f"FRAP batch summary: {payload}")
+                    else:
+                        self.update_frap_display(payload)
+
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    self.log_message("FRAP done.")
+                    return
+
+                elif msg_type == "error":
+                    self.set_ui_busy(False)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.log_message(payload)
+                    messagebox.showerror("FRAP Error", "FRAP analysis failed. See log.")
+                    return
+
+        except queue.Empty:
+            pass
+
+        if self.frap_proc is not None and not self.frap_proc.is_alive():
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("FRAP worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_frap_queue)
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------Diffusion Map GUI-------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
@@ -2453,6 +2807,8 @@ class ModularRICSGUI:
             "sim_cancel_event",
             "diffmap_cancel_event",
             "fcsfit_cancel_event",
+            "frap_cancel_event,"
+
         ):
             ev = getattr(self, ev_attr, None)
             try:
@@ -2483,11 +2839,11 @@ class ModularRICSGUI:
                 setattr(self, proc_attr, None)
 
         # 2–3) Stop any known worker processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc"):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc"):
             _stop_proc(proc_attr)
 
         # 4) Close queues properly (prevents resource_tracker semaphore warnings)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue"):
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue"):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
@@ -2506,6 +2862,7 @@ class ModularRICSGUI:
             "sim_cancel_event",
             "diffmap_cancel_event",
             "fcsfit_cancel_event",
+            "frap_cancel_event,"
         ):
             setattr(self, ev_attr, None)
 
@@ -2554,7 +2911,7 @@ class ModularRICSGUI:
     
     def _cleanup_mp(self):
         # terminate running processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc"):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc"):
             p = getattr(self, proc_attr, None)
             try:
                 if p is not None and p.is_alive():
@@ -2565,7 +2922,7 @@ class ModularRICSGUI:
             setattr(self, proc_attr, None)
 
         # close queues properly
-        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue"):
+        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue"):
             q = getattr(self, q_attr, None)
             try:
                 if q is not None:

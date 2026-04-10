@@ -14,6 +14,8 @@ src/theatrics/fcsfit/__init__.py
 src/theatrics/fcsfit/batch.py
 src/theatrics/fcsfit/calculations.py
 src/theatrics/fcsfit/models_and_fit.py
+src/theatrics/frap/__init__.py
+src/theatrics/frap/analysis.py
 src/theatrics/modules/SFCS_module.py
 src/theatrics/modules/export_rics.py
 src/theatrics/modules/inspect_metadata.py
@@ -28,5 +30,6 @@ src/theatrics/workers/diffmap_worker.py
 src/theatrics/workers/export_worker.py
 src/theatrics/workers/fcsfit_worker.py
 src/theatrics/workers/fit_worker.py
+src/theatrics/workers/frap_worker.py
 src/theatrics/workers/sfcs_worker.py
 src/theatrics/workers/sim_worker.py

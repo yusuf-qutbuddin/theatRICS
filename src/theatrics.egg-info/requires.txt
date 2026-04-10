@@ -10,6 +10,8 @@ pylibCZIrw
 scikit-image
 lmfit
 statsmodels
+openpyxl
+path
 
 [docs]
 sphinx
