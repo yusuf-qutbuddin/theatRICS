@@ -27,7 +27,7 @@ The code reads the CSV using `pandas.read_csv(..., header=None)` and then uses:
 - `count_rate = data.iloc[0, 2]`
 - `sigma_G = col 3`
 
-So your CSV must contain at least these columns.
+So your CSV must contain at least these columns. Essentially, make sure that at lease the first column contains the diffusion time in seconds and second column contains correlation values. Ideally the 4th column contains the std deviation in G.
 
 ---
 

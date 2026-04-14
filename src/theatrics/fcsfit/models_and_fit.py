@@ -1117,14 +1117,42 @@ def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, P
 
 def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radius, PSF_aspect_ratio,
          user_initial_params, initial_params,figure_display_delay, user_tau_domain=False, tau_domain=(1e-6, 1), goodness_of_fit_criterion = ['instant_correlation_wilcoxon']):
-    # parsing correlation csv files with Pandas DataFrame
-    data = pd.read_csv(path+'.csv', header = None)
+     # parsing correlation csv files with Pandas DataFrame
+    data = pd.read_csv(path + '.csv', header=None)
+
+    # collect warnings that can be shown in the GUI
+    warnings_list = []
 
     # parsing columns to numpy arrays for further processing
-    tau = data.iloc[:,0].to_numpy()
-    G = data.iloc[:, 1].to_numpy()
-    sigma_G = data.iloc[:, 3].to_numpy()
-    count_rate = data.iloc[0,2]
+    tau = data.iloc[:, 0].to_numpy(dtype=float)
+    G = data.iloc[:, 1].to_numpy(dtype=float)
+
+    # Robust fallback for sigma_G
+    try:
+        sigma_G = data.iloc[:, 3].to_numpy(dtype=float)
+        bad = ~np.isfinite(sigma_G) | (sigma_G <= 0)
+        if np.any(bad):
+            fallback_sigma = max(float(np.nanstd(G)), 1e-6)
+            sigma_G[bad] = fallback_sigma
+            warnings_list.append(
+                f"sigma_G column contained invalid or non-positive values; replaced with fallback sigma={fallback_sigma:.3g}"
+            )
+    except Exception:
+        fallback_sigma = max(float(np.nanstd(G)), 1e-6)
+        sigma_G = np.full_like(G, fallback_sigma, dtype=float)
+        warnings_list.append(
+            f"sigma_G column missing; using fallback constant sigma={fallback_sigma:.3g}"
+        )
+
+    # Robust fallback for count_rate
+    try:
+        count_rate = float(data.iloc[0, 2])
+        if not np.isfinite(count_rate) or count_rate <= 0:
+            count_rate = 1.0
+            warnings_list.append("count_rate missing/invalid/non-positive; using fallback count_rate=1.0")
+    except Exception:
+        count_rate = 1.0
+        warnings_list.append("count_rate column missing; using fallback count_rate=1.0")
     
     if user_tau_domain:
     
@@ -1500,6 +1528,8 @@ def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radiu
         # keep both for flexibility in GUI exports
         "estimate_data": estimate_data,   # dict of lists
         "return_dict": return_dict,       # full fit output dict
+
+         "warnings": warnings_list, # warnings list
     }
     return out
    

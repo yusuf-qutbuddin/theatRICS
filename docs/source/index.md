@@ -14,7 +14,8 @@ workflow/rics_export
 workflow/rics_fitting
 workflow/sfcs
 workflow/fcs_fitting
-workflows/frap
+workflow/frap
+workflow/vesicle_finder
 workflow/diffusion_map
 outputs
 troubleshooting

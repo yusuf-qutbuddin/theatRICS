@@ -35,7 +35,10 @@ from theatrics.workers.sim_worker import simulate_rics_process_main
 from theatrics.workers.diffmap_worker import diffusion_map_process_main
 from theatrics.workers.fcsfit_worker import fcsfit_process_main
 from theatrics.workers.frap_worker import frap_process_main
+from theatrics.workers.vesicle_worker import vesicle_process_main
 
+
+from theatrics.vesicle import detection as vesicle_detection
 from theatrics.fcsfit import calculations as calculate
 from theatrics.utils.file_utils import get_files_from_folder
 from theatrics.utils.mp_utils import clamp_workers
@@ -107,6 +110,7 @@ class ModularRICSGUI:
         self.create_SFCS_tab()
         self.create_fcs_fit_tab()
         self.create_frap_tab()
+        self.create_vesicle_tab()
         self.create_results_tab()
 
 
@@ -128,7 +132,7 @@ class ModularRICSGUI:
         self.progress_bar = ttk.Progressbar(self.root, variable=self.progress_var, maximum=100)
         self.progress_bar.grid(row=2, column=0, sticky='ew')
         
-        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
      
         # self.status_var = tk.StringVar()
         # self.status_var.set("Ready - All modules loaded successfully")
@@ -946,6 +950,9 @@ class ModularRICSGUI:
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------           
 
     def run_simulation(self):
+        if self._is_worker_running("sim_proc"):
+            messagebox.showwarning("Warning", "Simulation is already running.")
+            return
         if not self.output_path.get():
             messagebox.showwarning("Warning", "Please set an output path.")
             return
@@ -957,8 +964,9 @@ class ModularRICSGUI:
         self.progress_bar.grid()
 
         sim_type = self.sim_type.get()
-        img_shape = (int(self.img_height.get()), int(self.img_width.get()))
-        n_frames = int(self.n_frames.get())
+        img_shape = (self._safe_int(self.img_height, "Image height", 256),
+                     self._safe_int(self.img_width, "Image width", 256))
+        n_frames = self._safe_int(self.n_frames, "Number of frames", 25)
 
         cpu_n = clamp_workers(self.n_cpu.get(), max_fraction=0.8, hard_cap=64)
 
@@ -967,19 +975,18 @@ class ModularRICSGUI:
             sim_type=sim_type,
             img_shape=img_shape,
             n_frames=n_frames,
-            pixel_dwell_time_us=float(self.pixel_dwell.get()),
-            pixel_size_nm=float(self.pixel_size.get()),
-            brightness_khz=float(self.brightness.get()),
-            n_particles=int(self.n_particles.get()),
-            background=float(self.background.get()),
-            psf_sigma_px=float(self.psf_sigma.get()),
+            pixel_dwell_time_us=self._safe_float(self.pixel_dwell, "Pixel dwell", 50.0),
+            pixel_size_nm=self._safe_float(self.pixel_size, "Pixel size", 20.0),
+            brightness_khz=self._safe_float(self.brightness, "Brightness", 2000.0),
+            n_particles=self._safe_int(self.n_particles, "Number of particles", 250),
+            background=self._safe_float(self.background, "Background", 0.0),
+            psf_sigma_px=self._safe_float(self.psf_sigma, "PSF sigma", 5.0),
             output_path=self.output_path.get(),
             cpu_n=cpu_n,
         )
+        Dx = self._safe_float(self.diff_x, "Diffusion X", 10.0)
+        Dy = self._safe_float(self.diff_y, "Diffusion Y", 10.0)
 
-        # diffusion fields depend on sim type
-        Dx = float(self.diff_x.get())
-        Dy = float(self.diff_y.get())
         if sim_type == "isotropic":
             params["diffusion_um2_s"] = 0.5 * (Dx + Dy)
         else:
@@ -1176,7 +1183,9 @@ class ModularRICSGUI:
 
         self.root.after(50, self._poll_sfcs_queue)
     def run_SFCS(self):
-        
+        if self._is_worker_running("sfcs_proc"):
+            messagebox.showwarning("Warning", "SFCS is already running.")
+            return
 
         if not self.sfcs_input_file.get():
             messagebox.showwarning("Warning", "Please select an input file first")
@@ -1187,7 +1196,7 @@ class ModularRICSGUI:
         self.progress_var.set(0.0)
         self.progress_bar.grid()  # since you used grid for it
 
-        cpu_n = int(self.n_cpu.get())
+        cpu_n = self._safe_int(self.n_cpu, "CPU cores", 4)
         if cpu_n >= multiprocessing.cpu_count():
             cpu_n = max(1, int(0.8 * multiprocessing.cpu_count()))
 
@@ -1365,6 +1374,9 @@ class ModularRICSGUI:
         self.root.after(50, self._poll_export_queue)
     
     def export_rics(self):
+        if self._is_worker_running("export_proc"):
+            messagebox.showwarning("Warning", "RICS export is already running.")
+            return
         """Export RICS map using export worker (process-based)."""
         if not self.input_file.get() and not self.batch_input_folder.get():
             messagebox.showwarning("Warning", "Please select an input file or a folder for batch processing")
@@ -1385,9 +1397,9 @@ class ModularRICSGUI:
 
         params = dict(
             input_file=input_file,
-            channel=int(self.channel.get()),
-            crop_factor=float(self.crop_factor.get()),
-            window_size=int(self.window_size.get()),
+            channel=self._safe_int(self.channel, "Channel", 0),
+            crop_factor=self._safe_float(self.crop_factor, "Crop factor", 0.5),
+            window_size=self._safe_int(self.window_size, "Window size", 3),
             correct_drift=bool(self.correct_drift.get()),
         )
 
@@ -1609,6 +1621,9 @@ class ModularRICSGUI:
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
 
     def run_fitting(self):
+        if self._is_worker_running("fit_proc"):
+            messagebox.showwarning("Warning", "RICS fitting is already running.")
+            return
 
         if not self.rics_file.get() and not self.batch_fit_folder.get():
             messagebox.showwarning("Warning", "Please load a RICS map first or select a batch folder")
@@ -1622,15 +1637,15 @@ class ModularRICSGUI:
         # build params
         base_params = dict(
             saving_path=self.saving_path.get(),
-            crop_fast=float(self.fit_crop_fast.get()),
-            crop_slow=float(self.fit_crop_slow.get()),
+            crop_fast=self._safe_float(self.fit_crop_fast, "Crop fast", 0.5),
+            crop_slow=self._safe_float(self.fit_crop_slow, "Crop slow", 0.5),
             diffusion_model=self.diffusion_model.get(),
-            channel_to_use=int(self.channel_to_use.get()),
-            fit_pixel_size_nm=float(self.fit_pixel_size.get()),
-            fit_pixel_dwell_us=float(self.fit_pixel_dwell.get()),
-            fit_line_time_ms=float(self.fit_line_time.get()),
-            psf_size_xy_um=float(self.fit_psf_xy.get()),
-            psf_aspect_ratio=float(self.fit_psf_aspect.get()),
+            channel_to_use=self._safe_int(self.channel_to_use, "Channel", 0),
+            fit_pixel_size_nm=self._safe_float(self.fit_pixel_size, "Pixel size", 20.0),
+            fit_pixel_dwell_us=self._safe_float(self.fit_pixel_dwell, "Pixel dwell", 50.0),
+            fit_line_time_ms=self._safe_float(self.fit_line_time, "Line time", 12.8),
+            psf_size_xy_um=self._safe_float(self.fit_psf_xy, "PSF XY", 0.2),
+            psf_aspect_ratio=self._safe_float(self.fit_psf_aspect, "PSF aspect", 5.0),
             do_fit_1d=bool(self.fit_1d_var.get()),
         )
 
@@ -2037,6 +2052,9 @@ class ModularRICSGUI:
         }
 
     def run_fcsfit(self):
+        if self._is_worker_running("fcsfit_proc"):
+            messagebox.showwarning("Warning", "FCS fitting is already running.")
+            return
         csv_path = self.fcsfit_csv.get().strip()
         folder = self.fcsfit_folder.get().strip()
 
@@ -2046,8 +2064,9 @@ class ModularRICSGUI:
 
         mode = "single" if csv_path else "batch"
 
-        tau_min = float(self.fcsfit_tau_min.get())
-        tau_max = float(self.fcsfit_tau_max.get())
+        tau_min = self._safe_float(self.fcsfit_tau_min, "Tau min", 1e-6)
+        tau_max = self._safe_float(self.fcsfit_tau_max, "Tau max", 1.0)
+
 
         initial_params = dict(self.fcs_default_initial_params())
 
@@ -2069,9 +2088,9 @@ class ModularRICSGUI:
             fitting_model=model,
             tau_domain=(tau_min, tau_max),
             user_tau_domain=True,
-            psf_radius_um=float(self.fcsfit_psf_radius.get()),
-            psf_aspect_ratio=float(self.fcsfit_psf_ar.get()),
-            experiment_T=float(self.fcsfit_expt_T.get()),
+            psf_radius_um=self._safe_float(self.fcsfit_psf_radius, "PSF radius", 0.25),
+            psf_aspect_ratio=self._safe_float(self.fcsfit_psf_ar, "PSF aspect ratio", 5.0),
+            experiment_T=self._safe_float(self.fcsfit_expt_T, "Experiment T", 30.0),
             BG_value=0.0,
             user_initial_params=True,
             initial_params=initial_params,
@@ -2255,6 +2274,9 @@ class ModularRICSGUI:
                         res = payload["res"] if isinstance(payload, dict) and "res" in payload else payload
                         self.update_fcs_fit_display(res, write_summary=True)
 
+                        for w in res.get("warnings", []):
+                            self.log_message(f"FCS warning: {w}")
+
                     self.set_ui_busy(False)
                     self.status_var.set("Ready")
                     self.progress_bar.grid_remove()
@@ -2288,6 +2310,9 @@ class ModularRICSGUI:
 
 
     def run_frap(self):
+        if self._is_worker_running("frap_proc"):
+            messagebox.showwarning("Warning", "FRAP analysis is already running.")
+            return
         czi_path = self.frap_czi.get().strip()
         folder = self.frap_folder.get().strip()
 
@@ -2308,14 +2333,15 @@ class ModularRICSGUI:
                 "F_0": None,
                 "f_bl": None,
                 "f_mob": None,
-                "D": float(self.frap_init_D.get()),
+                 "D": self._safe_float(self.frap_init_D, "Initial D", 200.0),
                 "t_b": None,
             },
             "bounds": {
                 "F_0": [0, None],
                 "f_bl": [0, 1.0],
                 "f_mob": [0, 1.2],
-                "D": [float(self.frap_D_lb.get()), float(self.frap_D_ub.get())],
+                "D": [self._safe_float(self.frap_D_lb, "D lower bound", 100.0),
+                      self._safe_float(self.frap_D_ub, "D upper bound", 1000.0)],
                 "t_b": [None, None],
             },
             "d_search_decades": 3,
@@ -2541,6 +2567,9 @@ class ModularRICSGUI:
 
     
     def run_diffusion_map(self):
+        if self._is_worker_running("diffmap_proc"):
+            messagebox.showwarning("Warning", "Diffusion map is already running.")
+            return
         if not self.input_file_diff_map.get():
             messagebox.showwarning("Warning", "Please select an input file first")
             return
@@ -2554,12 +2583,12 @@ class ModularRICSGUI:
 
         params = dict(
             input_file=self.input_file_diff_map.get(),
-            channel=int(self.channel_to_use_diff_map.get()),
-            psf_xy_um=float(self.fit_psf_xy.get()),
-            psf_aspect_ratio=float(self.fit_psf_aspect.get()),
-            window_size=int(self.window_size_diff_map.get()),
-            offset=int(self.offset_diff_map.get()),
-            diffusion_model=self.diffusion_model.get(),  # "2Ddiff" or "3Ddiff"
+            channel=self._safe_int(self.channel_to_use_diff_map, "Channel", 0),
+            psf_xy_um=self._safe_float(self.fit_psf_xy, "PSF XY", 0.2),
+            psf_aspect_ratio=self._safe_float(self.fit_psf_aspect, "PSF aspect", 5.0),
+            window_size=self._safe_int(self.window_size_diff_map, "Window size", 32),
+            offset=self._safe_int(self.offset_diff_map, "Offset", 16),
+            diffusion_model=self.diffusion_model.get(),
             cpu_n=cpu_n,
         )
 
@@ -2632,7 +2661,500 @@ class ModularRICSGUI:
 
         self.root.after(50, self._poll_diffmap_queue)
     
+    # -----------------------------------------------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------- Vesicle Finder GUI ------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 
+    def create_vesicle_tab(self):
+        ves_frame = ttk.Frame(self.notebook)
+        self.notebook.add(ves_frame, text="Vesicle Finder")
+
+        params_frame = ttk.LabelFrame(ves_frame, text="Detection Parameters", padding=10)
+        params_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        row = 0
+        ttk.Label(params_frame, text="CZI file:").grid(row=row, column=0, sticky="w")
+        self.vesicle_czi = tk.StringVar()
+        e1 = ttk.Entry(params_frame, textvariable=self.vesicle_czi, width=28)
+        e1.grid(row=row, column=1, sticky="ew")
+        b1 = ttk.Button(params_frame, text="Browse", command=self._browse_vesicle_czi)
+        b1.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e1)
+        self.register_busy_widget(b1)
+
+        row += 1
+        ttk.Label(params_frame, text="Channel:").grid(row=row, column=0, sticky="w")
+        self.vesicle_channel = tk.StringVar(value="0")
+        ttk.Combobox(params_frame, textvariable=self.vesicle_channel,
+                     values=["0", "1", "2", "3"], width=5).grid(row=row, column=1, sticky="w")
+        row += 1
+        ttk.Label(params_frame, text="Fallback pixel size (µm):").grid(row=row, column=0, sticky="w")
+        self.vesicle_fallback_px = tk.StringVar(value="")
+        ttk.Entry(params_frame, textvariable=self.vesicle_fallback_px, width=8).grid(row=row, column=1, sticky="w")
+        row += 1
+        ttk.Label(params_frame, text="Frame start:").grid(row=row, column=0, sticky="w")
+        self.vesicle_frame_start = tk.StringVar(value="0")
+        ttk.Entry(params_frame, textvariable=self.vesicle_frame_start, width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Frame end:").grid(row=row, column=0, sticky="w")
+        self.vesicle_frame_end = tk.StringVar(value="")
+        ttk.Entry(params_frame, textvariable=self.vesicle_frame_end, width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Frame step:").grid(row=row, column=0, sticky="w")
+        self.vesicle_frame_step = tk.StringVar(value="1")
+        ttk.Entry(params_frame, textvariable=self.vesicle_frame_step, width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Crop margin (µm):").grid(row=row, column=0, sticky="w")
+        self.vesicle_margin = tk.StringVar(value="5.0")
+        ttk.Entry(params_frame, textvariable=self.vesicle_margin, width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Detection method:").grid(row=row, column=0, sticky="w")
+        self.vesicle_method = tk.StringVar(value="hough")
+        method_cmb = ttk.Combobox(params_frame, textvariable=self.vesicle_method,
+                     values=["hough", "cellpose", "otsu"], width=10)
+        method_cmb.grid(row=row, column=1, sticky="w")
+
+        # Hough-specific params (shown/hidden based on method)
+        row += 1
+        self.vesicle_hough_frame = ttk.LabelFrame(params_frame, text="Hough Circle Parameters", padding=5)
+        self.vesicle_hough_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=5)
+
+        hr = 0
+        ttk.Label(self.vesicle_hough_frame, text="Min radius (µm):").grid(row=hr, column=0, sticky="w")
+        self.vesicle_min_radius = tk.StringVar(value="5.0")
+        ttk.Entry(self.vesicle_hough_frame, textvariable=self.vesicle_min_radius, width=8).grid(row=hr, column=1, sticky="w")
+
+        hr += 1
+        ttk.Label(self.vesicle_hough_frame, text="Max radius (µm):").grid(row=hr, column=0, sticky="w")
+        self.vesicle_max_radius = tk.StringVar(value="25.0")
+        ttk.Entry(self.vesicle_hough_frame, textvariable=self.vesicle_max_radius, width=8).grid(row=hr, column=1, sticky="w")
+
+        hr += 1
+        ttk.Label(self.vesicle_hough_frame, text="Radius step (µm):").grid(row=hr, column=0, sticky="w")
+        self.vesicle_radius_step = tk.StringVar(value="0.5")
+        ttk.Entry(self.vesicle_hough_frame, textvariable=self.vesicle_radius_step, width=8).grid(row=hr, column=1, sticky="w")
+
+        hr += 1
+        ttk.Label(self.vesicle_hough_frame, text="Canny sigma:").grid(row=hr, column=0, sticky="w")
+        self.vesicle_canny_sigma = tk.StringVar(value="2.0")
+        ttk.Entry(self.vesicle_hough_frame, textvariable=self.vesicle_canny_sigma, width=8).grid(row=hr, column=1, sticky="w")
+
+        hr += 1
+        ttk.Label(self.vesicle_hough_frame, text="Min distance (µm):").grid(row=hr, column=0, sticky="w")
+        self.vesicle_hough_min_dist = tk.StringVar(value="10.0")
+        ttk.Entry(self.vesicle_hough_frame, textvariable=self.vesicle_hough_min_dist, width=8).grid(row=hr, column=1, sticky="w")
+
+        hr += 1
+        ttk.Label(self.vesicle_hough_frame, text="Threshold:").grid(row=hr, column=0, sticky="w")
+        self.vesicle_hough_thresh = tk.StringVar(value="0.3")
+        ttk.Entry(self.vesicle_hough_frame, textvariable=self.vesicle_hough_thresh, width=8).grid(row=hr, column=1, sticky="w")
+
+        # Cellpose-specific params
+        row += 1
+        self.vesicle_cellpose_frame = ttk.LabelFrame(params_frame, text="Cellpose Parameters", padding=5)
+        self.vesicle_cellpose_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=5)
+
+        cr = 0
+        ttk.Label(self.vesicle_cellpose_frame, text="Model:").grid(row=cr, column=0, sticky="w")
+        self.vesicle_cp_model = tk.StringVar(value="cyto3")
+        ttk.Combobox(self.vesicle_cellpose_frame, textvariable=self.vesicle_cp_model,
+                     values=["cyto3", "cyto2", "cyto", "nuclei"], width=10).grid(row=cr, column=1, sticky="w")
+
+        cr += 1
+        ttk.Label(self.vesicle_cellpose_frame, text="Est. diameter (µm):").grid(row=cr, column=0, sticky="w")
+        self.vesicle_diameter = tk.StringVar(value="")
+        ttk.Entry(self.vesicle_cellpose_frame, textvariable=self.vesicle_diameter, width=8).grid(row=cr, column=1, sticky="w")
+        cr += 1
+        self.vesicle_cp_gpu = tk.BooleanVar(value=False)
+        gpu_cb = ttk.Checkbutton(self.vesicle_cellpose_frame, text="Use GPU",
+                        variable=self.vesicle_cp_gpu)
+        gpu_cb.grid(row=cr, column=0, columnspan=2, sticky="w")
+        cr += 1
+        self.vesicle_cp_invert = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.vesicle_cellpose_frame, text="Invert image (for ring-shaped GUVs)",
+                        variable=self.vesicle_cp_invert).grid(row=cr, column=0, columnspan=2, sticky="w")
+
+        # disable if torch/CUDA not available
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                gpu_cb.configure(state="disabled")
+                self.vesicle_cp_gpu.set(False)
+        except ImportError:
+            gpu_cb.configure(state="disabled")
+            self.vesicle_cp_gpu.set(False)
+        # method-dependent visibility
+        def _update_method_visibility(*_):
+            m = self.vesicle_method.get()
+            if m == "hough":
+                self.vesicle_hough_frame.grid()
+                self.vesicle_cellpose_frame.grid_remove()
+            elif m == "cellpose":
+                self.vesicle_hough_frame.grid_remove()
+                self.vesicle_cellpose_frame.grid()
+            else:
+                self.vesicle_hough_frame.grid_remove()
+                self.vesicle_cellpose_frame.grid_remove()
+
+        method_cmb.bind("<<ComboboxSelected>>", _update_method_visibility)
+        _update_method_visibility()
+        row += 1
+        ttk.Label(params_frame, text="Min area (µm²):").grid(row=row, column=0, sticky="w")
+        self.vesicle_min_area = tk.StringVar(value="200.0")
+        ttk.Entry(params_frame, textvariable=self.vesicle_min_area, width=8).grid(row=row, column=1, sticky="w")
+        row += 1
+        btn_frame = ttk.Frame(params_frame)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+
+        self.vesicle_detect_btn = ttk.Button(btn_frame, text="Detect Vesicles", command=self._run_vesicle_detect)
+        self.vesicle_detect_btn.pack(side=tk.LEFT, padx=5)
+        self.register_busy_widget(self.vesicle_detect_btn)
+
+        self.vesicle_crop_btn = ttk.Button(btn_frame, text="Crop Selected", command=self._run_vesicle_crop,
+                                           state="disabled")
+        self.vesicle_crop_btn.pack(side=tk.LEFT, padx=5)
+
+        self.vesicle_crop_all_btn = ttk.Button(btn_frame, text="Export All", command=self._run_vesicle_crop_all,
+                                               state="disabled")
+        self.vesicle_crop_all_btn.pack(side=tk.LEFT, padx=5)
+
+        # Vesicle list
+        row += 1
+        ttk.Label(params_frame, text="Detected vesicles (click to select):").grid(
+            row=row, column=0, columnspan=3, sticky="w"
+        )
+
+        row += 1
+        self.vesicle_listbox = tk.Listbox(params_frame, height=10, width=40, selectmode=tk.MULTIPLE)
+        self.vesicle_listbox.grid(row=row, column=0, columnspan=3, sticky="ew", pady=5)
+
+        # Display
+        display_frame = ttk.LabelFrame(ves_frame, text="Preview", padding=10)
+        display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.vesicle_fig = Figure(figsize=(8, 6), dpi=100, facecolor="gray")
+        self.vesicle_canvas = FigureCanvasTkAgg(self.vesicle_fig, display_frame)
+        self.vesicle_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(self.vesicle_canvas, display_frame)
+        toolbar.update()
+
+        # Enable click-on-image selection
+        self.vesicle_canvas.mpl_connect("button_press_event", self._on_vesicle_click)
+
+        # State
+        self._vesicle_detect_result = None
+        self._vesicle_selected_labels = set()
+
+    def _browse_vesicle_czi(self):
+        fn = filedialog.askopenfilename(
+            title="Select CZI file",
+            filetypes=[("CZI files", "*.czi"), ("All files", "*.*")]
+        )
+        if fn:
+            self.vesicle_czi.set(fn)
+
+    def _vesicle_common_params(self):
+        diam_text = self.vesicle_diameter.get().strip()
+        diameter_um = float(diam_text) if diam_text else None
+
+        end_text = self.vesicle_frame_end.get().strip()
+        frame_end = int(end_text) if end_text else None
+
+        fallback_text = self.vesicle_fallback_px.get().strip()
+        fallback_pixel_size_um = float(fallback_text) if fallback_text else None
+
+        return dict(
+            czi_path=self.vesicle_czi.get().strip(),
+            channel=self._safe_int(self.vesicle_channel, "Channel", 0),
+            frame_start=self._safe_int(self.vesicle_frame_start, "Frame start", 0),
+            frame_end=frame_end,
+            frame_step=self._safe_int(self.vesicle_frame_step, "Frame step", 1),
+            crop_margin_um=self._safe_float(self.vesicle_margin, "Crop margin", 5.0),
+            method=self.vesicle_method.get(),
+            use_cellpose=self.vesicle_method.get() == "cellpose",
+            model_type=self.vesicle_cp_model.get(),
+            diameter=diameter_um,
+            cellpose_gpu=bool(self.vesicle_cp_gpu.get()),
+            cellpose_invert=bool(self.vesicle_cp_invert.get()),
+            min_area_um2=self._safe_float(self.vesicle_min_area, "Min area", 1.0),
+            min_radius_um=self._safe_float(self.vesicle_min_radius, "Min radius", 1.0),
+            max_radius_um=self._safe_float(self.vesicle_max_radius, "Max radius", 20.0),
+            radius_step_um=self._safe_float(self.vesicle_radius_step, "Radius step", 0.5),
+            canny_sigma=self._safe_float(self.vesicle_canny_sigma, "Canny sigma", 2.0),
+            hough_min_distance_um=self._safe_float(self.vesicle_hough_min_dist, "Min distance", 5.0),
+            hough_threshold_fraction=self._safe_float(self.vesicle_hough_thresh, "Threshold fraction", 0.3),
+            fallback_pixel_size_um=fallback_pixel_size_um,
+        )
+    # ---- DETECT ----
+    def _run_vesicle_detect(self):
+        if self._is_worker_running("vesicle_proc"):
+            messagebox.showwarning("Warning", "Vesicle detection is already running.")
+            return
+
+        if not self.vesicle_czi.get().strip():
+            messagebox.showwarning("Warning", "Please select a CZI file.")
+            return
+
+        self.log_message("Starting vesicle detection...")
+        self.status_var.set("Detecting vesicles...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        params = self._vesicle_common_params()
+        params["phase"] = "detect"
+        params["selected_labels"] = None
+
+        self.vesicle_queue = multiprocessing.Queue()
+        self.vesicle_cancel_event = multiprocessing.Event()
+
+        self.vesicle_proc = multiprocessing.Process(
+            target=vesicle_process_main,
+            args=(params, self.vesicle_queue, self.vesicle_cancel_event),
+            daemon=False,
+        )
+        self.vesicle_proc.start()
+        self._poll_vesicle_queue()
+
+    # ---- CROP SELECTED ----
+    def _run_vesicle_crop(self):
+        selected = list(self._vesicle_selected_labels)
+        if not selected:
+            messagebox.showwarning("Warning", "No vesicles selected. Click on the image or listbox.")
+            return
+        self._start_vesicle_crop(selected)
+
+    # ---- CROP ALL ----
+    def _run_vesicle_crop_all(self):
+        if self._vesicle_detect_result is None:
+            return
+        all_labels = [v["label"] for v in self._vesicle_detect_result["vesicles"]]
+        if not all_labels:
+            messagebox.showwarning("Warning", "No vesicles detected.")
+            return
+        self._start_vesicle_crop(all_labels)
+
+    def _start_vesicle_crop(self, labels):
+        if self._is_worker_running("vesicle_proc"):
+            messagebox.showwarning("Warning", "Vesicle processing is already running.")
+            return
+
+        self.log_message(f"Cropping {len(labels)} vesicle(s)...")
+        self.status_var.set("Cropping vesicles...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        params = self._vesicle_common_params()
+        params["phase"] = "crop"
+        params["selected_labels"] = labels
+
+        self.vesicle_queue = multiprocessing.Queue()
+        self.vesicle_cancel_event = multiprocessing.Event()
+
+        self.vesicle_proc = multiprocessing.Process(
+            target=vesicle_process_main,
+            args=(params, self.vesicle_queue, self.vesicle_cancel_event),
+            daemon=False,
+        )
+        self.vesicle_proc.start()
+        self._poll_vesicle_queue()
+
+    # ---- POLL ----
+    def _poll_vesicle_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.vesicle_queue.get_nowait()
+
+                if msg_type == "progress":
+                    self.set_ui_busy(True)
+                    self.progress_var.set(float(payload))
+
+                elif msg_type == "cancelled":
+                    self.log_message("Vesicle detection cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "done":
+                    result = payload
+                    if result["mode"] == "detect":
+                        self._handle_vesicle_detect_result(result)
+                    elif result["mode"] == "crop":
+                        self._handle_vesicle_crop_result(result)
+
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    return
+
+                elif msg_type == "error":
+                    self.set_ui_busy(False)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.log_message(payload)
+                    messagebox.showerror("Vesicle Error", "Vesicle detection failed. See log.")
+                    return
+
+        except queue.Empty:
+            pass
+
+        if self.vesicle_proc is not None and not self.vesicle_proc.is_alive():
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("Vesicle worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_vesicle_queue)
+
+    # ---- RESULT HANDLERS ----
+    def _handle_vesicle_detect_result(self, result):
+        self._vesicle_detect_result = result
+        self._vesicle_selected_labels = set()
+        vesicles = result["vesicles"]
+        pixel_size_um = result.get("pixel_size_um", None)
+
+        self.log_message(f"Detected {len(vesicles)} vesicle(s) in frame 0")
+        self.log_message(f"Total frames in file: {result['n_total_frames']}")
+        if pixel_size_um:
+            self.log_message(f"Pixel size: {pixel_size_um:.4f} µm")
+
+        if not vesicle_detection.CELLPOSE_AVAILABLE:
+            self.log_message("NOTE: Cellpose not installed; used Otsu fallback segmentation.")
+
+        if self.vesicle_method.get() == "hough":
+            from theatrics.vesicle.detection import OPENCV_AVAILABLE
+            if OPENCV_AVAILABLE:
+                self.log_message("Hough detection: using OpenCV (fast)")
+            else:
+                self.log_message("Hough detection: using skimage (OpenCV not installed)")
+
+        self.vesicle_listbox.delete(0, tk.END)
+        for v in vesicles:
+            if "radius_um" in v:
+                info = (f"Vesicle {v['label']}: "
+                        f"r={v.get('radius', '?')}px ({v.get('radius_um', 0):.1f}µm)  "
+                        f"d≈{v.get('equivalent_diameter_um', 0):.1f}µm  "
+                        f"area={v.get('area_um2', 0):.1f}µm²")
+            else:
+                info = (f"Vesicle {v['label']}: "
+                        f"d≈{v.get('equivalent_diameter_um', v.get('equivalent_diameter', 0)):.1f}µm  "
+                        f"area={v.get('area_um2', v.get('area', 0)):.1f}µm²")
+            self.vesicle_listbox.insert(tk.END, info)
+
+        self.vesicle_crop_btn.configure(state="normal")
+        self.vesicle_crop_all_btn.configure(state="normal")
+        self.vesicle_listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
+        self._update_vesicle_display()
+
+    def _handle_vesicle_crop_result(self, result):
+        self.log_message(f"Cropped {result['n_vesicles']} vesicle(s), {result['n_frames']} frames each")
+        self.log_message(f"Output directory: {result['output_dir']}")
+        for p in result["output_paths"]:
+            self.log_message(f"  → {p}")
+
+    # ---- DISPLAY ----
+    def _update_vesicle_display(self):
+        if self._vesicle_detect_result is None:
+            return
+
+        result = self._vesicle_detect_result
+        preview = result["preview_frame"]
+        labels = result["labels_frame0"]
+        vesicles = result["vesicles"]
+
+        self.vesicle_fig.clear()
+        gs = gridspec.GridSpec(1, 2, figure=self.vesicle_fig, width_ratios=[1, 1])
+
+        # Left: raw image with overlay contours
+        ax1 = self.vesicle_fig.add_subplot(gs[0, 0])
+        ax1.imshow(preview, cmap="gray")
+        ax1.set_title("Detected vesicles (click to select)")
+
+        # draw contours
+        from matplotlib.patches import Circle as MplCircle
+
+        for v in vesicles:
+            lbl = v["label"]
+            color = "lime" if lbl in self._vesicle_selected_labels else "cyan"
+
+            if "radius" in v:
+                # Hough detection: draw a circle
+                circ = MplCircle(
+                    (v["centroid_x"], v["centroid_y"]),
+                    v["radius"],
+                    fill=False, edgecolor=color, linewidth=1.5, alpha=0.8
+                )
+                ax1.add_patch(circ)
+            else:
+                # Cellpose/Otsu: draw contour dots
+                mask = labels == lbl
+                contours_y, contours_x = np.where(
+                    mask & ~scipy.ndimage.binary_erosion(mask)
+                )
+                ax1.scatter(contours_x, contours_y, s=0.3, c=color, alpha=0.7)
+
+            ax1.text(
+                v["centroid_x"], v["centroid_y"], str(lbl),
+                color="white", fontsize=8, ha="center", va="center",
+                fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.15", fc="black", alpha=0.6)
+            )
+         # Right: label map
+        ax2 = self.vesicle_fig.add_subplot(gs[0, 1])
+        ax2.imshow(labels, cmap="nipy_spectral", interpolation="nearest")
+        ax2.set_title("Segmentation labels")
+        ax2.axis("off")
+        self.vesicle_fig.tight_layout()
+        self.vesicle_canvas.draw()
+
+    # ---- CLICK ON IMAGE ----
+    def _on_vesicle_click(self, event):
+        if self._vesicle_detect_result is None:
+            return
+        if event.inaxes is None:
+            return
+
+        x, y = int(round(event.xdata)), int(round(event.ydata))
+        labels = self._vesicle_detect_result["labels_frame0"]
+
+        if y < 0 or y >= labels.shape[0] or x < 0 or x >= labels.shape[1]:
+            return
+
+        clicked_label = int(labels[y, x])
+        if clicked_label == 0:
+            return
+
+        # toggle selection
+        if clicked_label in self._vesicle_selected_labels:
+            self._vesicle_selected_labels.discard(clicked_label)
+            self.log_message(f"Deselected vesicle {clicked_label}")
+        else:
+            self._vesicle_selected_labels.add(clicked_label)
+            self.log_message(f"Selected vesicle {clicked_label}")
+
+        # sync listbox highlighting
+        self._sync_listbox_selection()
+        self._update_vesicle_display()
+
+    def _on_listbox_select(self, event):
+        self._vesicle_selected_labels = set()
+        vesicles = self._vesicle_detect_result["vesicles"]
+        for idx in self.vesicle_listbox.curselection():
+            if idx < len(vesicles):
+                self._vesicle_selected_labels.add(vesicles[idx]["label"])
+        self._update_vesicle_display()
+
+    def _sync_listbox_selection(self):
+        self.vesicle_listbox.selection_clear(0, tk.END)
+        vesicles = self._vesicle_detect_result["vesicles"]
+        for i, v in enumerate(vesicles):
+            if v["label"] in self._vesicle_selected_labels:
+                self.vesicle_listbox.selection_set(i)
 
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------`Results tab GUI-------------------------------------------------------------------
@@ -2788,6 +3310,25 @@ class ModularRICSGUI:
             except Exception as e:
                 messagebox.showerror("Error", f"Could not export plots: {str(e)}")
 
+    def _safe_float(self, var, name, fallback=0.0):
+        """Safely parse a tk.StringVar as float; log and return fallback on failure."""
+        try:
+            val = float(var.get())
+            if not np.isfinite(val):
+                raise ValueError("non-finite")
+            return val
+        except (ValueError, TypeError):
+            self.log_message(f"WARNING: invalid value for '{name}', using {fallback}")
+            return fallback
+
+    def _safe_int(self, var, name, fallback=0):
+        """Safely parse a tk.StringVar as int; log and return fallback on failure."""
+        try:
+            return int(var.get())
+        except (ValueError, TypeError):
+            self.log_message(f"WARNING: invalid value for '{name}', using {fallback}")
+            return fallback
+
     def cancel_current_task(self):
         self._cleanup_mp()
         """
@@ -2807,7 +3348,8 @@ class ModularRICSGUI:
             "sim_cancel_event",
             "diffmap_cancel_event",
             "fcsfit_cancel_event",
-            "frap_cancel_event,"
+            "frap_cancel_event",
+            "vesicle_cancel_event",
 
         ):
             ev = getattr(self, ev_attr, None)
@@ -2839,11 +3381,11 @@ class ModularRICSGUI:
                 setattr(self, proc_attr, None)
 
         # 2–3) Stop any known worker processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc"):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc",):
             _stop_proc(proc_attr)
 
         # 4) Close queues properly (prevents resource_tracker semaphore warnings)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue"):
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue",):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
@@ -2862,7 +3404,8 @@ class ModularRICSGUI:
             "sim_cancel_event",
             "diffmap_cancel_event",
             "fcsfit_cancel_event",
-            "frap_cancel_event,"
+            "frap_cancel_event",
+            "vesicle_cancel_event",
         ):
             setattr(self, ev_attr, None)
 
@@ -2911,7 +3454,7 @@ class ModularRICSGUI:
     
     def _cleanup_mp(self):
         # terminate running processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc"):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc"):
             p = getattr(self, proc_attr, None)
             try:
                 if p is not None and p.is_alive():
@@ -2922,7 +3465,7 @@ class ModularRICSGUI:
             setattr(self, proc_attr, None)
 
         # close queues properly
-        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue"):
+        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue"):
             q = getattr(self, q_attr, None)
             try:
                 if q is not None:
@@ -2934,6 +3477,22 @@ class ModularRICSGUI:
 
     def shutdown(self):
         self._cleanup_mp()
+
+    def on_close(self):
+        """Gracefully shut down all workers before closing the window."""
+        try:
+            self.cancel_current_task()
+            self._cleanup_mp()
+        except Exception:
+            pass
+        finally:
+            self.root.destroy()
+
+    def _is_worker_running(self, proc_attr):
+        """Return True if a worker process is currently alive."""
+        p = getattr(self, proc_attr, None)
+
+        return p is not None and p.is_alive()
 
     def restart_application(self):
         if not messagebox.askyesno(

@@ -122,7 +122,8 @@ def run_batch_folder(
     os.makedirs(outer_results_dir, exist_ok=True)
 
     fitting_model = kwargs["fitting_model"]
-    summary_csv = os.path.join(outer_results_dir, f"{pattern}_{fitting_model}_fit_summary.csv")
+    pattern_corrected = pattern[1:]
+    summary_csv = os.path.join(outer_results_dir, f"{fitting_model}_{pattern_corrected}_fit_summary.csv")
 
     if progress_queue is not None:
         progress_queue.put(("progress", 0.0))
