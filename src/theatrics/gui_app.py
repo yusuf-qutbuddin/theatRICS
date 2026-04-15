@@ -655,6 +655,16 @@ class ModularRICSGUI:
         ttk.Entry(params_frame, textvariable=self.frap_D_ub, width=10).grid(row=row, column=1, sticky="w")
 
         row += 1
+        ttk.Label(params_frame, text="Number of ROIs:").grid(row=row, column=0, sticky="w")
+        self.frap_n_rois = tk.StringVar(value="")
+        ttk.Entry(params_frame, textvariable=self.frap_n_rois, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Control ROI index (0-based):").grid(row=row, column=0, sticky="w")
+        self.frap_ctrl_idx = tk.StringVar(value="")
+        ttk.Entry(params_frame, textvariable=self.frap_ctrl_idx, width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
         btn_frame = ttk.Frame(params_frame)
         btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
 
@@ -2324,11 +2334,15 @@ class ModularRICSGUI:
 
         px_text = self.frap_pixel_size.get().strip()
         pixel_size_um = float(px_text) if px_text else None
+        n_rois_text = self.frap_n_rois.get().strip()
+        ctrl_idx_text = self.frap_ctrl_idx.get().strip()
 
         config = {
             "frap_pattern": self.frap_pattern.get(),
             "pixel_size_um": pixel_size_um,
             "imaging_bleach": bool(self.frap_imaging_bleach.get()),
+            "n_rois": int(n_rois_text) if n_rois_text else None,
+            "ctrl_idx": int(ctrl_idx_text) if ctrl_idx_text else None,
             "init": {
                 "F_0": None,
                 "f_bl": None,
@@ -2529,12 +2543,18 @@ class ModularRICSGUI:
                     self.log_message(f"Finished FRAP: {payload.get('czi_path')}")
 
                 elif msg_type == "done":
+                    
                     if isinstance(payload, dict) and "last_res" in payload:
                         if payload["last_res"] is not None:
                             self.update_frap_display(payload["last_res"])
+                            res = payload["last_res"]
+                            self.log_message(f"ROIs found: {res.get('n_rois_in_metadata', '?')}, "
+                                             f"control: {res.get('ctrl_idx_source', 'auto')}")
                         self.log_message(f"FRAP batch summary: {payload}")
                     else:
                         self.update_frap_display(payload)
+                        self.log_message(f"ROIs found: {payload.get('n_rois_in_metadata', '?')}, "
+                                         f"control: {payload.get('ctrl_idx_source', 'auto')}")
 
                     self.set_ui_busy(False)
                     self.status_var.set("Ready")

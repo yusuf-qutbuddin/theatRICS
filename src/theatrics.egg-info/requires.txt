@@ -13,8 +13,14 @@ statsmodels
 openpyxl
 path
 
+[cellpose]
+cellpose
+
 [docs]
 sphinx
 sphinx-rtd-theme
 myst-parser
 sphinx-copybutton
+
+[opencv]
+opencv-python

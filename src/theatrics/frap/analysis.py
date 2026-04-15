@@ -453,6 +453,7 @@ def analyse_frap(czi_path, config=None):
     if pixel_size_um is None:
         pixel_size_um = config.get("pixel_size_um", None)
 
+    # ── Get ROIs ──
     rois = []
     for circle in root.iter():
         if circle.tag.split('}')[-1] != 'Circle':
@@ -474,28 +475,59 @@ def analyse_frap(czi_path, config=None):
         if None not in (cx, cy, r):
             rois.append({'id': circle.get('Id'), 'cx': cx, 'cy': cy, 'r': r})
 
+    # ── Validate ROI count ──
+    n_rois_expected = config.get("n_rois", None)
+
+    if n_rois_expected is not None:
+        if len(rois) < n_rois_expected:
+            raise RuntimeError(
+                f"Expected {n_rois_expected} ROIs but found only {len(rois)} in metadata. "
+                f"Check that the CZI file has the correct ROI annotations."
+            )
+        if len(rois) > n_rois_expected:
+            # use only the first n_rois_expected ROIs
+            rois = rois[:n_rois_expected]
+
     if len(rois) < 2:
         raise RuntimeError(f"{len(rois)} ROI(s) found — need at least 2.")
 
+    # ── Extract traces ──
     def trace(cx, cy, r):
         rr, cc = disk((cy, cx), r, shape=data.shape[1:])
         return data[:, rr, cc].mean(axis=1).astype(float)
 
     raw_traces = [trace(roi['cx'], roi['cy'], roi['r']) for roi in rois]
 
+    # ── Detect bleach frame ──
     drop = np.zeros(n_frames - 1)
     for tr in raw_traces:
         drop += np.maximum(tr[:-1] - tr[1:], 0)
     bleach_frame = int(np.argmax(drop)) + 1
 
-    def fdrop(tr, bf):
-        return (np.mean(tr[:bf]) - np.mean(tr[bf:bf + 3])) / (np.mean(tr[:bf]) + 1e-9)
+    # ── Identify control ROI ──
+    user_ctrl_idx = config.get("ctrl_idx", None)
 
-    drops = [fdrop(tr, bleach_frame) for tr in raw_traces]
-    ctrl_idx = int(np.argmin(drops))
+    if user_ctrl_idx is not None:
+        if user_ctrl_idx < 0 or user_ctrl_idx >= len(rois):
+            raise RuntimeError(
+                f"Control ROI index {user_ctrl_idx} is out of range. "
+                f"Valid range: 0 to {len(rois) - 1}."
+            )
+        ctrl_idx = user_ctrl_idx
+    else:
+        # auto-detect: ROI with smallest bleach drop
+        def fdrop(tr, bf):
+            return (np.mean(tr[:bf]) - np.mean(tr[bf:bf + 3])) / (np.mean(tr[:bf]) + 1e-9)
+
+        drops = [fdrop(tr, bleach_frame) for tr in raw_traces]
+        ctrl_idx = int(np.argmin(drops))
+
     frap_idxs = [i for i in range(len(raw_traces)) if i != ctrl_idx]
 
+    # ── Normalise ──
     norm_traces, ctrl_norm = normalise_with_control(raw_traces, ctrl_idx, bleach_frame)
+
+    
     colors = ROI_COLORS[:len(frap_idxs)]
     t_all = np.arange(n_frames) * dt
 
@@ -531,6 +563,8 @@ def analyse_frap(czi_path, config=None):
         "ctrl_idx": ctrl_idx,
         "frap_idxs": frap_idxs,
         "rois": rois,
+        "n_rois_in_metadata": len(rois),
+        "ctrl_idx_source": "user" if user_ctrl_idx is not None else "auto",
         "fit_results": fit_results,
         "t_all": t_all.tolist(),
         "raw_traces": [tr.tolist() for tr in raw_traces],
