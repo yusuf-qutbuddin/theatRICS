@@ -2735,7 +2735,7 @@ class ModularRICSGUI:
         ttk.Label(params_frame, text="Detection method:").grid(row=row, column=0, sticky="w")
         self.vesicle_method = tk.StringVar(value="hough")
         method_cmb = ttk.Combobox(params_frame, textvariable=self.vesicle_method,
-                     values=["hough", "cellpose", "otsu"], width=10)
+                     values=["hough", "cellpose","hough_transmitted", "otsu"], width=10)
         method_cmb.grid(row=row, column=1, sticky="w")
 
         # Hough-specific params (shown/hidden based on method)
@@ -2797,7 +2797,28 @@ class ModularRICSGUI:
         self.vesicle_cp_invert = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.vesicle_cellpose_frame, text="Invert image (for ring-shaped GUVs)",
                         variable=self.vesicle_cp_invert).grid(row=cr, column=0, columnspan=2, sticky="w")
+        cr += 1
+        ttk.Label(self.vesicle_cellpose_frame, text="Min circularity (0-1):").grid(row=cr, column=0, sticky="w")
+        self.vesicle_cp_circularity = tk.StringVar(value="0.65")
+        ttk.Entry(self.vesicle_cellpose_frame, textvariable=self.vesicle_cp_circularity, width=8).grid(row=cr, column=1, sticky="w")
 
+        cr += 1
+        ttk.Label(self.vesicle_cellpose_frame, text="Max eccentricity (0-1):").grid(row=cr, column=0, sticky="w")
+        self.vesicle_cp_eccentricity = tk.StringVar(value="0.5")
+        ttk.Entry(self.vesicle_cellpose_frame, textvariable=self.vesicle_cp_eccentricity, width=8).grid(row=cr, column=1, sticky="w")
+
+        cr += 1
+        ttk.Label(self.vesicle_cellpose_frame, text="Min solidity (0-1):").grid(row=cr, column=0, sticky="w")
+        self.vesicle_cp_solidity = tk.StringVar(value="0.85")
+        ttk.Entry(self.vesicle_cellpose_frame, textvariable=self.vesicle_cp_solidity, width=8).grid(row=cr, column=1, sticky="w")
+        cr += 1
+        self.vesicle_cp_preprocess = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.vesicle_cellpose_frame, text="Preprocess for transmitted light",
+                        variable=self.vesicle_cp_preprocess).grid(row=cr, column=0, columnspan=2, sticky="w")
+        cr += 1
+        self.vesicle_cp_fit_circles = tk.BooleanVar(value=True)
+        ttk.Checkbutton(self.vesicle_cellpose_frame, text="Fit circles to detected masks",
+                        variable=self.vesicle_cp_fit_circles).grid(row=cr, column=0, columnspan=2, sticky="w")
         # disable if torch/CUDA not available
         try:
             import torch
@@ -2810,7 +2831,7 @@ class ModularRICSGUI:
         # method-dependent visibility
         def _update_method_visibility(*_):
             m = self.vesicle_method.get()
-            if m == "hough":
+            if m in ("hough", "hough_transmitted"):
                 self.vesicle_hough_frame.grid()
                 self.vesicle_cellpose_frame.grid_remove()
             elif m == "cellpose":
@@ -2841,6 +2862,41 @@ class ModularRICSGUI:
         self.vesicle_crop_all_btn = ttk.Button(btn_frame, text="Export All", command=self._run_vesicle_crop_all,
                                                state="disabled")
         self.vesicle_crop_all_btn.pack(side=tk.LEFT, padx=5)
+
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(row=row, column=0, columnspan=3, sticky="ew", pady=10)
+
+        row += 1
+        ttk.Label(params_frame, text="── Membrane Straightening ──", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=3, sticky="w"
+        )
+
+        row += 1
+        ttk.Label(params_frame, text="Thickness (µm):").grid(row=row, column=0, sticky="w")
+        self.vesicle_thickness = tk.StringVar(value="2.0")
+        ttk.Entry(params_frame, textvariable=self.vesicle_thickness, width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Intensity channel:").grid(row=row, column=0, sticky="w")
+        self.vesicle_straighten_channel = tk.StringVar(value="0")
+        ttk.Combobox(params_frame, textvariable=self.vesicle_straighten_channel,
+                     values=["0", "1", "2", "3"], width=5).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        straighten_btn_frame = ttk.Frame(params_frame)
+        straighten_btn_frame.grid(row=row, column=0, columnspan=3, pady=5)
+
+        self.vesicle_straighten_btn = ttk.Button(
+            straighten_btn_frame, text="Straighten Selected",
+            command=self._run_vesicle_straighten, state="disabled"
+        )
+        self.vesicle_straighten_btn.pack(side=tk.LEFT, padx=5)
+
+        self.vesicle_straighten_all_btn = ttk.Button(
+            straighten_btn_frame, text="Straighten All",
+            command=self._run_vesicle_straighten_all, state="disabled"
+        )
+        self.vesicle_straighten_all_btn.pack(side=tk.LEFT, padx=5)
 
         # Vesicle list
         row += 1
@@ -2900,6 +2956,11 @@ class ModularRICSGUI:
             diameter=diameter_um,
             cellpose_gpu=bool(self.vesicle_cp_gpu.get()),
             cellpose_invert=bool(self.vesicle_cp_invert.get()),
+            filter_circularity=self._safe_float(self.vesicle_cp_circularity, "Min circularity", 0.0),
+            filter_eccentricity=self._safe_float(self.vesicle_cp_eccentricity, "Max eccentricity", 1.0),
+            filter_solidity=self._safe_float(self.vesicle_cp_solidity, "Min solidity", 0.0),
+            preprocess_transmitted=bool(self.vesicle_cp_preprocess.get()),
+            fit_circles=bool(self.vesicle_cp_fit_circles.get()),
             min_area_um2=self._safe_float(self.vesicle_min_area, "Min area", 1.0),
             min_radius_um=self._safe_float(self.vesicle_min_radius, "Min radius", 1.0),
             max_radius_um=self._safe_float(self.vesicle_max_radius, "Max radius", 20.0),
@@ -3005,6 +3066,8 @@ class ModularRICSGUI:
                         self._handle_vesicle_detect_result(result)
                     elif result["mode"] == "crop":
                         self._handle_vesicle_crop_result(result)
+                    elif result["mode"] == "straighten":
+                        self._handle_vesicle_straighten_result(result)
 
                     self.set_ui_busy(False)
                     self.status_var.set("Ready")
@@ -3046,6 +3109,13 @@ class ModularRICSGUI:
         if not vesicle_detection.CELLPOSE_AVAILABLE:
             self.log_message("NOTE: Cellpose not installed; used Otsu fallback segmentation.")
 
+        if self.vesicle_method.get() in ("hough", "hough_transmitted"):
+            from theatrics.vesicle.detection import OPENCV_AVAILABLE
+            if OPENCV_AVAILABLE:
+                self.log_message(f"Hough detection ({self.vesicle_method.get()}): using OpenCV")
+            else:
+                self.log_message(f"Hough detection ({self.vesicle_method.get()}): using skimage")
+
         if self.vesicle_method.get() == "hough":
             from theatrics.vesicle.detection import OPENCV_AVAILABLE
             if OPENCV_AVAILABLE:
@@ -3068,6 +3138,8 @@ class ModularRICSGUI:
 
         self.vesicle_crop_btn.configure(state="normal")
         self.vesicle_crop_all_btn.configure(state="normal")
+        self.vesicle_straighten_btn.configure(state="normal")
+        self.vesicle_straighten_all_btn.configure(state="normal")
         self.vesicle_listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
         self._update_vesicle_display()
 
@@ -3176,6 +3248,171 @@ class ModularRICSGUI:
             if v["label"] in self._vesicle_selected_labels:
                 self.vesicle_listbox.selection_set(i)
 
+    def _run_vesicle_straighten(self):
+        selected = list(self._vesicle_selected_labels)
+        if not selected:
+            messagebox.showwarning("Warning", "No vesicles selected.")
+            return
+        vesicles = [v for v in self._vesicle_detect_result["vesicles"] if v["label"] in selected]
+        if not all("radius" in v for v in vesicles):
+            messagebox.showwarning("Warning", "Straightening requires Hough-detected vesicles with known radius.")
+            return
+        self._start_vesicle_straighten(vesicles)
+
+    def _run_vesicle_straighten_all(self):
+        if self._vesicle_detect_result is None:
+            return
+        vesicles = [v for v in self._vesicle_detect_result["vesicles"] if "radius" in v]
+        if not vesicles:
+            messagebox.showwarning("Warning", "No vesicles with known radius. Use Hough detection.")
+            return
+        self._start_vesicle_straighten(vesicles)
+
+    def _start_vesicle_straighten(self, vesicles):
+        if self._is_worker_running("vesicle_proc"):
+            messagebox.showwarning("Warning", "Vesicle processing is already running.")
+            return
+
+        self.log_message(f"Straightening {len(vesicles)} vesicle(s)...")
+        self.status_var.set("Straightening membranes...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        pixel_size_um = self._vesicle_detect_result.get("pixel_size_um", 1.0)
+
+        params = {
+            "phase": "straighten",
+            "czi_path": self._vesicle_detect_result["czi_path"],
+            "vesicles": vesicles,
+            "pixel_size_um": pixel_size_um,
+            "thickness_um": self._safe_float(self.vesicle_thickness, "Thickness", 2.0),
+            "straighten_channel": self._safe_int(self.vesicle_straighten_channel, "Channel", 0),
+            "frame_start": self._safe_int(self.vesicle_frame_start, "Frame start", 0),
+            "frame_end": int(self.vesicle_frame_end.get()) if self.vesicle_frame_end.get().strip() else None,
+            "frame_step": self._safe_int(self.vesicle_frame_step, "Frame step", 1),
+        }
+
+        self.vesicle_queue = multiprocessing.Queue()
+        self.vesicle_cancel_event = multiprocessing.Event()
+
+        self.vesicle_proc = multiprocessing.Process(
+            target=vesicle_process_main,
+            args=(params, self.vesicle_queue, self.vesicle_cancel_event),
+            daemon=False,
+        )
+        self.vesicle_proc.start()
+        self._poll_vesicle_queue()
+
+    def _handle_vesicle_straighten_result(self, result):
+        self.log_message(f"Straightened {len(result['results'])} vesicle(s)")
+        self.log_message(f"Output directory: {result['output_dir']}")
+
+        for r in result["results"]:
+            self.log_message(f"  Vesicle {r['vesicle_label']}:")
+            self.log_message(f"    Strip TIFF: {r['tiff_path']}")
+            self.log_message(f"    Profile CSV: {r['profile_csv']}")
+            self.log_message(f"    Total CSV: {r['total_csv']}")
+
+        self._update_straighten_display(result)
+
+    def _update_straighten_display(self, result):
+        results = result["results"]
+        n_vesicles = len(results)
+        pixel_size_um = result.get("pixel_size_um", 1.0)
+        thickness_um = result.get("thickness_um", 2.0)
+
+        self.vesicle_fig.clear()
+        self.vesicle_fig.set_constrained_layout(True)
+        if n_vesicles == 0:
+            return
+
+        # layout: for each vesicle, show 3 panels stacked vertically
+        # row 0: straightened strip (first frame)
+        # row 1: heatmap (intensity vs angle vs time)
+        # row 2: total intensity vs time
+        n_rows = 3
+        gs = gridspec.GridSpec(n_rows, n_vesicles, figure=self.vesicle_fig,
+                               height_ratios = [1,1,1])
+
+        for vi, res in enumerate(results):
+            strips = np.asarray(res["strips"], dtype=float)
+            profile = np.asarray(res["intensity_profile"], dtype=float)
+            total = np.asarray(res["total_intensity"], dtype=float)
+            angles = np.asarray(res["angles_deg"], dtype=float)
+            n_frames = res["n_frames"]
+            lbl = res["vesicle_label"]
+            radius_px = res["radius"]
+            radius_um = radius_px * pixel_size_um
+
+            # circumference in µm for x-axis
+            circumference_um = 2.0 * np.pi * radius_um
+            x_um = np.linspace(0, circumference_um, len(angles), endpoint=False)
+
+            # y-axis for thickness in µm
+            y_um = np.linspace(-thickness_um / 2, thickness_um / 2, strips.shape[1])
+
+            # ── Panel 1: straightened strip (frame 0) ──
+            ax1 = self.vesicle_fig.add_subplot(gs[0, vi])
+            im1 = ax1.imshow(
+                strips[0],
+                aspect="auto",
+                cmap="gray",
+                extent=[0, circumference_um, -thickness_um / 2, thickness_um / 2],
+                origin="lower",
+            )
+            ax1.set_xlabel("Position along membrane (µm)")
+            ax1.set_ylabel("Radial (µm)")
+            ax1.set_title(f"Vesicle {lbl} — frame 0\nr={radius_um:.1f}µm", fontsize=9)
+            self.vesicle_fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+
+            # ── Panel 2: heatmap (time vs angle) ──
+            ax2 = self.vesicle_fig.add_subplot(gs[1, vi])
+
+            if n_frames > 1:
+                im2 = ax2.imshow(
+                    profile,
+                    aspect="auto",
+                    cmap="inferno",
+                    extent=[0, circumference_um, n_frames - 1, 0],
+                    interpolation="nearest",
+                )
+                ax2.set_xlabel("Position along membrane (µm)")
+                ax2.set_ylabel("Frame")
+                ax2.set_title(f"Vesicle {lbl} — intensity heatmap", fontsize=9)
+                self.vesicle_fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+            else:
+                # single frame: show as a 1D intensity profile line plot
+                ax2.plot(x_um, profile[0], "r-", linewidth=1.5)
+                ax2.set_xlabel("Position along membrane (µm)")
+                ax2.set_ylabel("Mean intensity")
+                ax2.set_title(f"Vesicle {lbl} — membrane profile (single frame)", fontsize=9)
+                ax2.grid(True, alpha=0.3)
+
+            # ── Panel 3: total intensity vs time ──
+            ax3 = self.vesicle_fig.add_subplot(gs[2, vi])
+
+            if n_frames > 1:
+                ax3.plot(range(n_frames), total, "b-", linewidth=1.5)
+                ax3.set_xlabel("Frame")
+                ax3.set_ylabel("Total intensity")
+                ax3.set_title(f"Vesicle {lbl} — total membrane intensity", fontsize=9)
+                ax3.grid(True, alpha=0.3)
+            else:
+                # single frame: show as a bar or text
+                ax3.bar([0], [total[0]], color="steelblue", width=0.5)
+                ax3.set_xlabel("Frame")
+                ax3.set_ylabel("Total intensity")
+                ax3.set_title(f"Vesicle {lbl} — total: {total[0]:.1f}", fontsize=9)
+                ax3.set_xlim(-0.5, 0.5)
+
+        self.vesicle_fig.tight_layout()
+        self.vesicle_canvas.draw()
+
+        # save SVG
+        out_dir = result["output_dir"]
+        svg_path = os.path.join(out_dir, "straighten_overview.svg")
+        self.vesicle_fig.savefig(svg_path, dpi=300, bbox_inches="tight", facecolor="white")
+        self.log_message(f"Saved overview SVG: {svg_path}")
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------`Results tab GUI-------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 

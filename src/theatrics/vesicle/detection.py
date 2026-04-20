@@ -285,7 +285,137 @@ def segment_hough_circles_opencv(
 
     return labels, circle_list
 
-
+def segment_hough_transmitted(
+    image: np.ndarray,
+    min_radius: int = 50,
+    max_radius: int = 500,
+    min_distance: int = 100,
+    threshold_fraction: float = 0.3,
+    max_circles: int = 20,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Hough circle detection optimized for transmitted-light images.
+    Uses gradient-based preprocessing to suppress internal fringes.
+    """
+    from skimage.filters import gaussian
+    from skimage.feature import canny
+    
+    img = image.astype(np.float64)
+    img = img - img.min()
+    if img.max() > 0:
+        img = img / img.max()
+    
+    # heavy blur to kill internal fringes
+    blurred = gaussian(img, sigma=10.0)
+    
+    # gradient magnitude
+    gy, gx = np.gradient(blurred)
+    gradient = np.sqrt(gx**2 + gy**2)
+    
+    # smooth gradient
+    gradient = gaussian(gradient, sigma=3.0)
+    
+    # normalize
+    gradient = gradient / gradient.max() if gradient.max() > 0 else gradient
+    
+    # now try OpenCV on the preprocessed gradient image
+    if OPENCV_AVAILABLE:
+        try:
+            img_uint8 = (gradient * 255).astype(np.uint8)
+            
+            circles = None
+            for param2_val in [20, 15, 10, 5]:
+                circles = cv2.HoughCircles(
+                    img_uint8,
+                    cv2.HOUGH_GRADIENT,
+                    dp=1.0,
+                    minDist=max(min_distance, 10),
+                    param1=50,
+                    param2=param2_val,
+                    minRadius=0,
+                    maxRadius=max_radius,
+                )
+                if circles is not None and len(circles[0]) > 0:
+                    break
+            
+            if circles is not None:
+                h, w = image.shape[:2]
+                labels = np.zeros((h, w), dtype=np.int32)
+                circle_list = []
+                
+                all_circles = np.round(circles[0]).astype(int)
+                filtered = [(cx, cy, r) for (cx, cy, r) in all_circles
+                           if min_radius <= r <= max_radius]
+                filtered.sort(key=lambda c: c[2], reverse=True)
+                
+                if len(filtered) > max_circles:
+                    filtered = filtered[:max_circles]
+                
+                for i, (cx, cy, r) in enumerate(filtered, start=1):
+                    yy, xx = np.ogrid[:h, :w]
+                    circle_mask = ((yy - cy)**2 + (xx - cx)**2) <= r**2
+                    fill_mask = circle_mask & (labels == 0)
+                    labels[fill_mask] = i
+                    
+                    area = int(np.sum(circle_mask))
+                    circle_list.append({
+                        "label": i,
+                        "centroid_y": float(cy),
+                        "centroid_x": float(cx),
+                        "radius": int(r),
+                        "bbox": (max(0, int(cy-r)), max(0, int(cx-r)),
+                                min(h, int(cy+r)), min(w, int(cx+r))),
+                        "area": area,
+                        "equivalent_diameter": float(2*r),
+                    })
+                
+                return labels, circle_list
+        except Exception:
+            pass
+    
+    # fallback: use skimage Hough on edge image
+    edges = canny(gradient, sigma=1.0)
+    radii = np.arange(min_radius, max_radius + 1, max(1, (max_radius - min_radius) // 50))
+    
+    if len(radii) == 0:
+        return np.zeros(image.shape[:2], dtype=np.int32), []
+    
+    hough_res = hough_circle(edges, radii)
+    accum_max = np.max(hough_res) if hough_res.size > 0 else 1.0
+    threshold = accum_max * threshold_fraction
+    
+    accums, cx_arr, cy_arr, rad_arr = hough_circle_peaks(
+        hough_res, radii,
+        min_xdistance=min_distance,
+        min_ydistance=min_distance,
+        threshold=max(1.0, threshold),
+        num_peaks=max_circles,
+        total_num_peaks=max_circles,
+    )
+    
+    h, w = image.shape[:2]
+    labels = np.zeros((h, w), dtype=np.int32)
+    circle_list = []
+    
+    for i, (acc, cx, cy, r) in enumerate(zip(accums, cx_arr, cy_arr, rad_arr), start=1):
+        yy, xx = np.ogrid[:h, :w]
+        circle_mask = ((yy - cy)**2 + (xx - cx)**2) <= r**2
+        fill_mask = circle_mask & (labels == 0)
+        labels[fill_mask] = i
+        
+        area = int(np.sum(circle_mask))
+        circle_list.append({
+            "label": i,
+            "centroid_y": float(cy),
+            "centroid_x": float(cx),
+            "radius": int(r),
+            "bbox": (max(0, int(cy-r)), max(0, int(cx-r)),
+                    min(h, int(cy+r)), min(w, int(cx+r))),
+            "area": area,
+            "equivalent_diameter": float(2*r),
+        })
+    
+    return labels, circle_list
 
 def segment_cellpose(
     image: np.ndarray,
@@ -295,37 +425,205 @@ def segment_cellpose(
     cellprob_threshold: float = 0.0,
     gpu: bool = False,
     invert: bool = False,
-    ) -> np.ndarray:
-
+    filter_circularity: float = 0.0,
+    filter_eccentricity: float = 1.0,
+    filter_solidity: float = 0.0,
+    preprocess_transmitted: bool = False,
+    fit_circles: bool = False,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    Segment vesicles using Cellpose.
+    Segment vesicles using Cellpose with optional shape filtering
+    and transmitted-light preprocessing.
 
     Parameters
     ----------
     image : 2D array (Y, X)
     model_type : Cellpose model name
-    diameter : estimated vesicle diameter in pixels (None = auto)
+    diameter : estimated object diameter in pixels (None = auto)
     flow_threshold : Cellpose flow threshold
     cellprob_threshold : Cellpose cell probability threshold
+    gpu : use GPU if available
+    invert : invert image (for ring-shaped GUVs with bright membrane)
+    filter_circularity : minimum circularity (0-1). 0 = no filter.
+        circularity = 4π × area / perimeter²
+        1.0 = perfect circle
+    filter_eccentricity : maximum eccentricity (0-1). 1 = no filter.
+        0.0 = perfect circle, 1.0 = line
+    filter_solidity : minimum solidity (0-1). 0 = no filter.
+        solidity = area / convex_hull_area
+        1.0 = perfectly convex
 
     Returns
     -------
     labels : 2D int array, 0 = background, 1..N = vesicle IDs
+    If fit_circles=True, fits a circle to each detected mask and returns
+    filled circular labels + circle info (like Hough output).
+    If fit_circles=False, returns raw Cellpose masks + regionprops info.
     """
-
     if not CELLPOSE_AVAILABLE:
-        raise ImportError("Cellpose is not installed. Install with: pip install cellpose")
+        raise ImportError("Cellpose is not installed.")
+
+    img = image.copy().astype(np.float64)
+
+    if preprocess_transmitted:
+        img = _preprocess_transmitted_light(img)
 
     model = cp_models.Cellpose(model_type=model_type, gpu=gpu)
-    masks, flows, styles, diams = model.eval(
-        image,
+
+    masks_list, flows, styles, diams = model.eval(
+        [img],
         diameter=diameter,
         flow_threshold=flow_threshold,
         cellprob_threshold=cellprob_threshold,
         channels=[0, 0],
         invert=invert,
     )
-    return masks.astype(np.int32)
+    masks = masks_list[0].astype(np.int32)
+
+    if filter_circularity > 0 or filter_eccentricity < 1.0 or filter_solidity > 0:
+        masks = _filter_masks_by_shape(
+            masks,
+            min_circularity=filter_circularity,
+            max_eccentricity=filter_eccentricity,
+            min_solidity=filter_solidity,
+        )
+
+    if fit_circles:
+        return _convert_masks_to_circles(masks, image.shape)
+    else:
+        return masks
+
+
+def _convert_masks_to_circles(
+    masks: np.ndarray,
+    image_shape: tuple,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Convert Cellpose masks to filled circles by fitting a circle
+    to each mask's pixels.
+    """
+    h, w = image_shape[:2]
+    labels = np.zeros((h, w), dtype=np.int32)
+    circles = []
+
+    unique_labels = np.unique(masks)
+    unique_labels = unique_labels[unique_labels > 0]
+
+    label_counter = 0
+    for lbl in unique_labels:
+        mask = masks == lbl
+        fit = _fit_circle_to_mask(mask)
+
+        if fit is None:
+            continue
+
+        label_counter += 1
+        cx = fit["centroid_x"]
+        cy = fit["centroid_y"]
+        r = fit["radius"]
+
+        yy, xx = np.ogrid[:h, :w]
+        circle_mask = ((yy - cy)**2 + (xx - cx)**2) <= r**2
+        fill_mask = circle_mask & (labels == 0)
+        labels[fill_mask] = label_counter
+
+        area = int(np.sum(circle_mask))
+        circles.append({
+            "label": label_counter,
+            "centroid_y": cy,
+            "centroid_x": cx,
+            "radius": int(round(r)),
+            "bbox": (
+                max(0, int(cy - r)),
+                max(0, int(cx - r)),
+                min(h, int(cy + r)),
+                min(w, int(cx + r)),
+            ),
+            "area": area,
+            "equivalent_diameter": float(2 * r),
+        })
+
+    return labels, circles
+
+
+def _preprocess_transmitted_light(image: np.ndarray) -> np.ndarray:
+    """
+    Preprocess transmitted-light image for vesicle detection.
+    
+    Strategy:
+    1. Strong Gaussian blur to remove internal fringes/texture
+    2. Compute gradient magnitude (highlights the membrane edge only)
+    3. Second Gaussian blur to connect edge fragments
+    4. Normalize to 0-255
+    """
+    from skimage.filters import gaussian
+    from skimage.exposure import rescale_intensity
+    
+    img = image.astype(np.float64)
+    
+    # normalize to 0-1
+    img = img - img.min()
+    if img.max() > 0:
+        img = img / img.max()
+    
+    # step 1: heavy blur to remove internal texture/fringes
+    # sigma should be large enough to smooth out fringes but small
+    # enough to keep the membrane edge
+    blurred = gaussian(img, sigma=10.0)
+    
+    # step 2: compute gradient magnitude
+    # this highlights intensity transitions = membrane edge
+    gy, gx = np.gradient(blurred)
+    gradient = np.sqrt(gx**2 + gy**2)
+    
+    # step 3: smooth the gradient to connect edge fragments
+    gradient_smooth = gaussian(gradient, sigma=5.0)
+    
+    # step 4: normalize to 0-255
+    result = rescale_intensity(gradient_smooth, out_range=(0.0, 255.0))
+    
+    return result
+
+
+def _filter_masks_by_shape(
+    masks: np.ndarray,
+    min_circularity: float = 0.0,
+    max_eccentricity: float = 1.0,
+    min_solidity: float = 0.0,
+) -> np.ndarray:
+    """
+    Filter labeled regions by circularity, eccentricity, and solidity.
+    Removes regions that don't pass the thresholds.
+    Returns a relabeled mask.
+    """
+    props = regionprops(masks)
+    keep_labels = set()
+
+    for p in props:
+        # circularity = 4π × area / perimeter²
+        perimeter = p.perimeter
+        if perimeter > 0:
+            circularity = 4.0 * np.pi * p.area / (perimeter ** 2)
+        else:
+            circularity = 0.0
+
+        eccentricity = p.eccentricity
+        solidity = p.solidity
+
+        if (circularity >= min_circularity and
+            eccentricity <= max_eccentricity and
+            solidity >= min_solidity):
+            keep_labels.add(p.label)
+
+    # zero out rejected regions
+    filtered = masks.copy()
+    for p in props:
+        if p.label not in keep_labels:
+            filtered[filtered == p.label] = 0
+
+    # relabel sequentially
+    filtered = label(filtered > 0).astype(np.int32)
+    return filtered
 
 
     
@@ -377,17 +675,14 @@ def segment_frame(
     hough_min_distance: int = 100,
     hough_threshold_fraction: float = 0.3,
     cellpose_gpu: bool = False,
-    cellpose_invert: bool = False,) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
-    
+    cellpose_invert: bool = False,
+    filter_circularity: float = 0.0,
+    filter_eccentricity: float = 1.0,
+    filter_solidity: float = 0.0,
+    preprocess_transmitted: bool = False,
+    fit_circles: bool = False,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
 
-    """
-    Segment one frame using the specified method.
-
-    Returns
-    -------
-    labels : 2D int array
-    vesicles : list of dicts with region properties
-    """
     if method == "hough":
         labels, vesicles = segment_hough_circles(
             image,
@@ -403,15 +698,25 @@ def segment_frame(
     elif method == "cellpose":
         if use_cellpose and CELLPOSE_AVAILABLE:
             try:
-                labels = segment_cellpose(
+                result = segment_cellpose(
                     image,
                     model_type=model_type,
                     diameter=diameter,
                     gpu=cellpose_gpu,
                     invert=cellpose_invert,
+                    filter_circularity=filter_circularity,
+                    filter_eccentricity=filter_eccentricity,
+                    filter_solidity=filter_solidity,
+                    preprocess_transmitted=preprocess_transmitted,
+                    fit_circles=fit_circles,
                 )
-                vesicles = extract_vesicle_info(labels)
-                return labels, vesicles
+                if fit_circles:
+                    labels, vesicles = result
+                    return labels, vesicles
+                else:
+                    masks = result
+                    vesicles = extract_vesicle_info(masks)
+                    return masks, vesicles
             except Exception:
                 pass
         labels = segment_otsu_watershed(image, min_area=min_area)
@@ -421,6 +726,16 @@ def segment_frame(
     elif method == "otsu":
         labels = segment_otsu_watershed(image, min_area=min_area)
         vesicles = extract_vesicle_info(labels)
+        return labels, vesicles
+    elif method == "hough_transmitted":
+        labels, vesicles = segment_hough_transmitted(
+            image,
+            min_radius=min_radius,
+            max_radius=max_radius,
+            min_distance=hough_min_distance,
+            threshold_fraction=hough_threshold_fraction,
+            max_circles=20,
+        )
         return labels, vesicles
 
     else:
@@ -554,6 +869,11 @@ def process_vesicle_detection(
     hough_threshold_fraction: float = 0.3,
     cellpose_gpu: bool = False,
     cellpose_invert: bool = False,
+    filter_circularity: float = 0.0,
+    filter_eccentricity: float = 1.0,
+    filter_solidity: float = 0.0,
+    preprocess_transmitted: bool = False,
+    fit_circles: bool = False,
     fallback_pixel_size_um: Optional[float] = None,
     selected_labels: Optional[List[int]] = None,
     progress_queue=None,
@@ -623,6 +943,11 @@ def process_vesicle_detection(
             hough_threshold_fraction=hough_threshold_fraction,
             cellpose_gpu=cellpose_gpu,
             cellpose_invert=cellpose_invert,
+            filter_circularity=filter_circularity,
+            filter_eccentricity=filter_eccentricity,
+            filter_solidity=filter_solidity,
+            preprocess_transmitted=preprocess_transmitted,
+            fit_circles=fit_circles,
         )
 
         # add µm info to each vesicle for display
@@ -764,3 +1089,172 @@ def _find_best_match(
     _frame0_centroids[target_label] = (best_v["centroid_y"], best_v["centroid_x"])
 
     return crop_square(frame, best_v["centroid_y"], best_v["centroid_x"], crop_margin)
+
+
+
+def straighten_membrane(
+    image: np.ndarray,
+    center_y: float,
+    center_x: float,
+    radius: float,
+    thickness_px: int,
+    n_angle_points: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Unroll an annular band around a circle into a rectangular strip.
+
+    Parameters
+    ----------
+    image : 2D array (Y, X)
+    center_y, center_x : circle center in pixels
+    radius : circle radius in pixels
+    thickness_px : full thickness of the annular band in pixels
+    n_angle_points : number of angular samples (default: circumference in pixels)
+
+    Returns
+    -------
+    strip : 2D array (thickness_px, n_angle_points)
+        Row 0 = inner edge of annulus
+        Last row = outer edge of annulus
+        Columns = angular position (0° to 360°)
+    """
+    from scipy.ndimage import map_coordinates
+
+    half_t = thickness_px / 2.0
+
+    # number of angular samples: default to circumference
+    if n_angle_points is None:
+        n_angle_points = max(10, int(round(2.0 * np.pi * radius)))
+
+    # angles from 0 to 2π
+    angles = np.linspace(0, 2 * np.pi, n_angle_points, endpoint=False)
+
+    # radial positions from (R - half_thickness) to (R + half_thickness)
+    radii = np.linspace(radius - half_t, radius + half_t, thickness_px)
+
+    # build coordinate grids
+    # shape: (thickness_px, n_angle_points)
+    r_grid, a_grid = np.meshgrid(radii, angles, indexing='ij')
+
+    # convert polar to cartesian
+    y_coords = center_y + r_grid * np.sin(a_grid)
+    x_coords = center_x + r_grid * np.cos(a_grid)
+
+    # sample the image using bilinear interpolation
+    coords = np.array([y_coords.ravel(), x_coords.ravel()])
+    strip = map_coordinates(image.astype(np.float64), coords, order=1, mode='constant', cval=0.0)
+    strip = strip.reshape(thickness_px, n_angle_points)
+
+    return strip
+
+
+def straighten_vesicle_timeseries(
+    czi_path: str,
+    channel: int,
+    center_y: float,
+    center_x: float,
+    radius: float,
+    thickness_px: int,
+    frame_start: int = 0,
+    frame_end: Optional[int] = None,
+    frame_step: int = 1,
+    n_angle_points: Optional[int] = None,
+    progress_queue=None,
+    cancel_event=None,
+) -> Dict[str, Any]:
+    """
+    Straighten membrane for all selected frames.
+
+    Returns dict with:
+      - strips: 3D array (n_frames, thickness_px, n_angle_points)
+      - intensity_profile: 2D array (n_frames, n_angle_points) — mean across thickness
+      - total_intensity: 1D array (n_frames,) — total membrane intensity per frame
+      - angles_deg: 1D array (n_angle_points,) — angular positions in degrees
+    """
+    stack, n_total = read_czi_frames(czi_path, channel, frame_start, frame_end, frame_step)
+    n_frames = stack.shape[0]
+
+    if n_angle_points is None:
+        n_angle_points = max(10, int(round(2.0 * np.pi * radius)))
+
+    strips = np.zeros((n_frames, thickness_px, n_angle_points), dtype=np.float64)
+    intensity_profile = np.zeros((n_frames, n_angle_points), dtype=np.float64)
+    total_intensity = np.zeros(n_frames, dtype=np.float64)
+
+    for fi in range(n_frames):
+        if cancel_event is not None and cancel_event.is_set():
+            return {"mode": "cancelled"}
+
+        strip = straighten_membrane(
+            stack[fi], center_y, center_x, radius, thickness_px, n_angle_points
+        )
+        strips[fi] = strip
+        intensity_profile[fi] = np.mean(strip, axis=0)
+        total_intensity[fi] = np.sum(strip)
+
+        if progress_queue:
+            pct = 100.0 * (fi + 1) / n_frames
+            progress_queue.put(("progress", pct))
+
+    angles_deg = np.linspace(0, 360, n_angle_points, endpoint=False)
+
+    return {
+        "mode": "straighten",
+        "strips": strips,
+        "intensity_profile": intensity_profile,
+        "total_intensity": total_intensity,
+        "angles_deg": angles_deg,
+        "n_frames": n_frames,
+        "thickness_px": thickness_px,
+        "n_angle_points": n_angle_points,
+        "center_y": center_y,
+        "center_x": center_x,
+        "radius": radius,
+        "channel": channel,
+        "czi_path": str(czi_path),
+    }
+
+def _fit_circle_to_mask(mask: np.ndarray) -> Optional[Dict[str, Any]]:
+    """
+    Given a binary mask (e.g. a membrane arc from Cellpose),
+    fit a circle to the mask pixels using least-squares.
+    
+    Returns dict with centroid_y, centroid_x, radius, or None if fitting fails.
+    """
+    ys, xs = np.where(mask)
+    if len(ys) < 10:
+        return None
+    
+    # least-squares circle fit
+    # minimize sum of (sqrt((x-cx)^2 + (y-cy)^2) - r)^2
+    # using algebraic method: fit to x^2 + y^2 + Dx + Ey + F = 0
+    # where cx = -D/2, cy = -E/2, r = sqrt(cx^2 + cy^2 - F)
+    
+    x = xs.astype(np.float64)
+    y = ys.astype(np.float64)
+    
+    A = np.column_stack([x, y, np.ones_like(x)])
+    b = x**2 + y**2
+    
+    try:
+        result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    
+    cx = result[0] / 2.0
+    cy = result[1] / 2.0
+    r_squared = cx**2 + cy**2 + result[2]
+    
+    if r_squared <= 0:
+        return None
+    
+    r = np.sqrt(r_squared)
+    
+    if r < 5 or r > max(mask.shape):
+        return None
+    
+    return {
+        "centroid_x": float(cx),
+        "centroid_y": float(cy),
+        "radius": float(r),
+    }
