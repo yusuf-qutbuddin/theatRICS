@@ -45,9 +45,12 @@ def vesicle_process_main(params, out_queue, cancel_event):
             hough_min_distance_um=params.get("hough_min_distance_um", 5.0),
             hough_threshold_fraction=params.get("hough_threshold_fraction", 0.3),
             fallback_pixel_size_um=params.get("fallback_pixel_size_um", None),
+            weight_search_range = params.get("weight_search_range", 2.0),
+            threshold_method=params.get("threshold_method", "huang"),
             selected_labels=params.get("selected_labels", None),
             progress_queue=out_queue,
             cancel_event=cancel_event,
+            debug=params.get("debug", False),
         )
 
         if cancel_event.is_set():

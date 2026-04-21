@@ -2735,9 +2735,34 @@ class ModularRICSGUI:
         ttk.Label(params_frame, text="Detection method:").grid(row=row, column=0, sticky="w")
         self.vesicle_method = tk.StringVar(value="hough")
         method_cmb = ttk.Combobox(params_frame, textvariable=self.vesicle_method,
-                     values=["hough", "cellpose","hough_transmitted", "otsu"], width=10)
+                     values=["hough", "cellpose","weighted_intensity","hough_transmitted", "otsu"], width=10)
         method_cmb.grid(row=row, column=1, sticky="w")
+        # Weighted intensity-specific params (shown/hidden based on method)
+        row += 1
+        self.vesicle_weight_frame = ttk.LabelFrame(params_frame, text="Weighted Intensity Circle Parameters", padding=5)
+        self.vesicle_weight_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=5)
 
+        wr = 0
+        ttk.Label(self.vesicle_weight_frame, text="Min radius (µm):").grid(row=wr, column=0, sticky="w")
+        self.vesicle_min_radius = tk.StringVar(value="5.0")
+        ttk.Entry(self.vesicle_weight_frame, textvariable=self.vesicle_min_radius, width=8).grid(row=wr, column=1, sticky="w")
+
+        wr += 1
+        ttk.Label(self.vesicle_weight_frame, text="Max radius (µm):").grid(row=wr, column=0, sticky="w")
+        self.vesicle_max_radius = tk.StringVar(value="25.0")
+        ttk.Entry(self.vesicle_weight_frame, textvariable=self.vesicle_max_radius, width=8).grid(row=wr, column=1, sticky="w")
+
+        wr += 1
+        ttk.Label(self.vesicle_weight_frame, text="Search range (um):").grid(row=wr, column=0, sticky="w")
+        self.search_range = tk.StringVar(value="2.0")
+        ttk.Entry(self.vesicle_weight_frame, textvariable=self.search_range, width=8).grid(row=wr, column=1, sticky="w")
+        wr += 1
+        ttk.Label(self.vesicle_weight_frame, text="Threshold method:").grid(row=wr, column=0, sticky="w")
+        self.vesicle_threshold_method = tk.StringVar(value="huang")
+        ttk.Combobox(self.vesicle_weight_frame, textvariable=self.vesicle_threshold_method,
+                     values=["huang", "otsu", "yen", "triangle", "mean", "li"],
+                     width=10).grid(row=wr, column=1, sticky="w")
+        
         # Hough-specific params (shown/hidden based on method)
         row += 1
         self.vesicle_hough_frame = ttk.LabelFrame(params_frame, text="Hough Circle Parameters", padding=5)
@@ -2830,12 +2855,15 @@ class ModularRICSGUI:
             self.vesicle_cp_gpu.set(False)
         # method-dependent visibility
         def _update_method_visibility(*_):
+            self.vesicle_cellpose_frame.grid_remove()
+            self.vesicle_hough_frame.grid_remove()
+            self.vesicle_weight_frame.grid_remove()
             m = self.vesicle_method.get()
             if m in ("hough", "hough_transmitted"):
                 self.vesicle_hough_frame.grid()
-                self.vesicle_cellpose_frame.grid_remove()
+            elif m == "weighted_intensity":
+                self.vesicle_weight_frame.grid()
             elif m == "cellpose":
-                self.vesicle_hough_frame.grid_remove()
                 self.vesicle_cellpose_frame.grid()
             else:
                 self.vesicle_hough_frame.grid_remove()
@@ -2854,7 +2882,10 @@ class ModularRICSGUI:
         self.vesicle_detect_btn = ttk.Button(btn_frame, text="Detect Vesicles", command=self._run_vesicle_detect)
         self.vesicle_detect_btn.pack(side=tk.LEFT, padx=5)
         self.register_busy_widget(self.vesicle_detect_btn)
-
+        row += 1
+        self.vesicle_debug = tk.BooleanVar(value=False)
+        ttk.Checkbutton(params_frame, text="Save debug images",
+                        variable=self.vesicle_debug).grid(row=row, column=0, columnspan=3, sticky="w")
         self.vesicle_crop_btn = ttk.Button(btn_frame, text="Crop Selected", command=self._run_vesicle_crop,
                                            state="disabled")
         self.vesicle_crop_btn.pack(side=tk.LEFT, padx=5)
@@ -2968,7 +2999,10 @@ class ModularRICSGUI:
             canny_sigma=self._safe_float(self.vesicle_canny_sigma, "Canny sigma", 2.0),
             hough_min_distance_um=self._safe_float(self.vesicle_hough_min_dist, "Min distance", 5.0),
             hough_threshold_fraction=self._safe_float(self.vesicle_hough_thresh, "Threshold fraction", 0.3),
-            fallback_pixel_size_um=fallback_pixel_size_um,
+            weight_search_range = self._safe_float(self.search_range, "Search Range", 2.0),
+            threshold_method=self.vesicle_threshold_method.get(),
+            fallback_pixel_size_um = fallback_pixel_size_um,
+            debug=bool(self.vesicle_debug.get()),
         )
     # ---- DETECT ----
     def _run_vesicle_detect(self):
@@ -3115,7 +3149,8 @@ class ModularRICSGUI:
                 self.log_message(f"Hough detection ({self.vesicle_method.get()}): using OpenCV")
             else:
                 self.log_message(f"Hough detection ({self.vesicle_method.get()}): using skimage")
-
+        if self.vesicle_method.get() == "weighted_intensity":
+            self.log_message("Detection: weighted peripheral intensity method (Kohyama et al. 2022)")
         if self.vesicle_method.get() == "hough":
             from theatrics.vesicle.detection import OPENCV_AVAILABLE
             if OPENCV_AVAILABLE:
@@ -3201,7 +3236,7 @@ class ModularRICSGUI:
         ax2.imshow(labels, cmap="nipy_spectral", interpolation="nearest")
         ax2.set_title("Segmentation labels")
         ax2.axis("off")
-        self.vesicle_fig.tight_layout()
+        # self.vesicle_fig.tight_layout()
         self.vesicle_canvas.draw()
 
     # ---- CLICK ON IMAGE ----
@@ -3405,7 +3440,7 @@ class ModularRICSGUI:
                 ax3.set_title(f"Vesicle {lbl} — total: {total[0]:.1f}", fontsize=9)
                 ax3.set_xlim(-0.5, 0.5)
 
-        self.vesicle_fig.tight_layout()
+        # self.vesicle_fig.tight_layout()
         self.vesicle_canvas.draw()
 
         # save SVG

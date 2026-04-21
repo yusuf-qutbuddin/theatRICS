@@ -11,7 +11,9 @@ from skimage.measure import label, regionprops
 from skimage.morphology import binary_opening, disk as morph_disk
 from scipy import ndimage
 from skimage.transform import hough_circle, hough_circle_peaks
-from skimage.feature import canny
+from scipy.ndimage import binary_fill_holes
+from skimage.feature import canny, peak_local_max
+from skimage.segmentation import watershed
 # Try importing cellpose; set flag if unavailable
 try:
     from cellpose import models as cp_models
@@ -25,10 +27,155 @@ try:
 except ImportError:
     cv2 = None
     OPENCV_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# Debug utilities
+# ---------------------------------------------------------------------------
+
+_DEBUG_SAVE = False          # set to True to enable debug saving
+_DEBUG_DIR: Optional[str] = None   # will be set automatically from czi_path
+
+
+def enable_debug_saving(czi_path: str) -> str:
+    """
+    Enable debug image saving.
+    Creates a folder next to the CZI file called '<stem>_debug/'.
+    Returns the debug folder path.
+    """
+    global _DEBUG_SAVE, _DEBUG_DIR
+    debug_dir = str(Path(czi_path).parent / f"{Path(czi_path).stem}_debug")
+    Path(debug_dir).mkdir(exist_ok=True)
+    _DEBUG_SAVE = True
+    _DEBUG_DIR = debug_dir
+    return debug_dir
+
+
+def disable_debug_saving():
+    """Disable debug image saving."""
+    global _DEBUG_SAVE
+    _DEBUG_SAVE = False
+
+
+def save_debug_image(image: np.ndarray, name: str, normalize: bool = True):
+    """
+    Save a 2D array as a TIFF in the debug folder.
+
+    Parameters
+    ----------
+    image : 2D or 3D array to save
+    name : filename without extension (e.g. '01_raw', '02_blurred')
+    normalize : if True, normalize to uint16 range for viewing
+    """
+    global _DEBUG_SAVE, _DEBUG_DIR
+
+    if not _DEBUG_SAVE or _DEBUG_DIR is None:
+        return
+
+    out_path = str(Path(_DEBUG_DIR) / f"{name}.tif")
+
+    img = np.squeeze(image).astype(np.float64)
+
+    if normalize and img.max() > img.min():
+        img = (img - img.min()) / (img.max() - img.min())
+        img = (img * 65535).astype(np.uint16)
+    elif normalize:
+        img = np.zeros_like(img, dtype=np.uint16)
+    else:
+        # save raw values as float32
+        img = img.astype(np.float32)
+
+    tifffile.imwrite(out_path, img)
+    print(f"[DEBUG] Saved: {out_path}")
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
 # Segmentation
 # ---------------------------------------------------------------------------
+def threshold_huang(image: np.ndarray) -> float:
+    """
+    Huang's fuzzy thresholding method.
+    Python implementation of the ImageJ Huang method.
+    
+    Reference:
+    Huang L-K and Wang M-J J (1995) Image thresholding by minimizing
+    the measures of fuzziness. Pattern Recognition 28(1): 41-51.
+    """
+    # build histogram
+    hist, bin_edges = np.histogram(image.ravel(), bins=256)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
 
+    n = len(hist)
+    total = hist.sum()
+
+    # cumulative sums
+    cumsum = np.cumsum(hist)
+    cumsum_val = np.cumsum(hist * bin_centers)
+
+    # normalize
+    mu = cumsum_val / np.maximum(cumsum, 1)
+
+    # for each threshold t, compute the fuzzy entropy
+    img_min = bin_centers[0]
+    img_max = bin_centers[-1]
+    img_range = img_max - img_min
+
+    if img_range == 0:
+        return float(img_min)
+
+    best_t = 0
+    min_entropy = np.inf
+
+    for t in range(n):
+        # background mean
+        if cumsum[t] > 0:
+            mu_b = cumsum_val[t] / cumsum[t]
+        else:
+            mu_b = img_min
+
+        # foreground mean
+        if total - cumsum[t] > 0:
+            mu_f = (cumsum_val[-1] - cumsum_val[t]) / (total - cumsum[t])
+        else:
+            mu_f = img_max
+
+        # fuzzy entropy: sum over all pixels
+        entropy = 0.0
+        for i in range(n):
+            if hist[i] == 0:
+                continue
+            x = bin_centers[i]
+
+            # membership to background
+            if mu_b != img_min:
+                mu_bg = 1.0 / (1.0 + abs(x - mu_b) / (img_range))
+            else:
+                mu_bg = 1.0 if x == img_min else 0.0
+
+            # membership to foreground
+            if mu_f != img_max:
+                mu_fg = 1.0 / (1.0 + abs(x - mu_f) / (img_range))
+            else:
+                mu_fg = 1.0 if x == img_max else 0.0
+
+            # Shannon entropy contribution
+            def h(mu_val):
+                if mu_val <= 0 or mu_val >= 1:
+                    return 0.0
+                return -mu_val * np.log(mu_val) - (1 - mu_val) * np.log(1 - mu_val)
+
+            entropy += hist[i] * (h(mu_bg) + h(mu_fg))
+
+        if entropy < min_entropy:
+            min_entropy = entropy
+            best_t = t
+
+    return float(bin_centers[best_t])
 def read_pixel_size_from_czi(czi_path: str) -> Optional[float]:
     """
     Read pixel size in µm from CZI metadata.
@@ -57,6 +204,434 @@ def um_to_px(value_um: float, pixel_size_um: float) -> int:
     if pixel_size_um is None or pixel_size_um <= 0:
         raise ValueError("Pixel size not available; cannot convert µm to pixels")
     return max(1, int(round(value_um / pixel_size_um)))
+
+def segment_weighted_intensity(
+    image: np.ndarray,
+    min_radius_px: int = 50,
+    max_radius_px: int = 500,
+    search_range_px: int = 10,
+    min_circularity: float = 0.60,
+    max_circularity: float = 1.00,
+    threshold_method: str = "huang",
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Detect GUVs using the weighted peripheral intensity method from
+    Kohyama et al., Nature Communications 2022.
+
+    This is the Python equivalent of the ImageJ macro approach:
+    1. Threshold the image to find rough GUV candidates
+    2. For each candidate, scan positions and diameters to find
+       the circle that maximizes total peripheral intensity
+       (mean × nPixels along the circumference)
+    3. Return the best-fit circles
+
+    This method works well for:
+    - Transmitted light images
+    - Fluorescence membrane images (bright ring)
+    - Fluorescence interior images (bright interior)
+
+    Parameters
+    ----------
+    image : 2D array (Y, X)
+    min_radius_px : minimum GUV radius in pixels
+    max_radius_px : maximum GUV radius in pixels
+    search_range_px : how many pixels around each detected region to scan
+    min_circularity : minimum circularity for initial detection (0-1)
+    max_circularity : maximum circularity for initial detection (0-1)
+    threshold_method : thresholding method for initial detection
+
+    Returns
+    -------
+    labels : 2D int array (Y, X), each circle filled with unique label
+    circles : list of dicts with keys:
+              label, centroid_y, centroid_x, radius, area, equivalent_diameter
+    """
+    from scipy.ndimage import map_coordinates
+
+    img = image.astype(np.float64)
+
+    # normalize
+    img_norm = img - img.min()
+    if img_norm.max() > 0:
+        img_norm = img_norm / img_norm.max()
+    save_debug_image(img_norm, "01_raw_normalized")
+    h, w = image.shape[:2]
+
+    # ── Step 1: coarse detection by thresholding ──
+    if threshold_method == "huang":
+        thresh = threshold_huang(img_norm)
+    elif threshold_method == "yen":
+        from skimage.filters import threshold_yen
+        thresh = threshold_yen(img_norm)
+    elif threshold_method == "triangle":
+        from skimage.filters import threshold_triangle
+        thresh = threshold_triangle(img_norm)
+    elif threshold_method == "mean":
+        from skimage.filters import threshold_mean
+        thresh = threshold_mean(img_norm)
+    elif threshold_method == "li":
+        from skimage.filters import threshold_li
+        thresh = threshold_li(img_norm)
+    else:
+        thresh = threshold_otsu(img_norm)
+
+    binary = img_norm > thresh
+    binary = binary_opening(binary, morph_disk(3))
+    labeled_coarse = label(binary)
+    save_debug_image(binary.astype(np.uint8) * 255, "02_binary_after_threshold", normalize=False)
+    save_debug_image(labeled_coarse.astype(np.float32), "03_labeled_coarse", normalize=True)
+     # ── Step 2: build candidates from bright pixel clusters ──
+    candidates = []
+
+    # Strategy A: try standard region-based candidate finding first
+    # (works well for filled/large regions)
+    for prop in regionprops(labeled_coarse):
+        r_equiv = prop.equivalent_diameter / 2.0
+        if r_equiv < min_radius_px or r_equiv > max_radius_px:
+            continue
+        if prop.perimeter > 0:
+            circ = 4.0 * np.pi * prop.area / (prop.perimeter ** 2)
+        else:
+            circ = 0.0
+        if not (min_circularity <= circ <= max_circularity):
+            continue
+        min_row, min_col, max_row, max_col = prop.bbox
+        candidates.append({
+            "x": min_col,
+            "y": min_row,
+            "w": max_col - min_col,
+            "h": max_row - min_row,
+        })
+
+    # Strategy B: if no candidates found, use bounding boxes of
+    # spatially clustered bright pixels
+    # This handles thin membrane arcs which are individually small
+    if not candidates:
+        from skimage.morphology import binary_dilation, binary_erosion, disk as dsk
+        from skimage.segmentation import watershed
+        from skimage.feature import peak_local_max
+        from scipy import ndimage as sci_ndimage
+        from skimage.filters import gaussian
+
+        # ── B1: dilate membrane to close gaps in arcs ──
+        dilation_radius = max(3, min_radius_px // 8)
+        binary_dilated = binary_dilation(binary, dsk(dilation_radius))
+        save_debug_image(
+            binary_dilated.astype(np.uint8) * 255,
+            "05_binary_dilated", normalize=False
+        )
+
+        # ── B2: fill the interior of each ring ──
+        # flood-fill from the border: anything reachable from the border
+        # without crossing a membrane pixel is "exterior"
+        # everything else is "interior" of a GUV
+        from scipy.ndimage import binary_fill_holes
+
+        # invert: background becomes foreground
+        inverted = ~binary_dilated
+
+        # label connected components of the inverted image
+        labeled_inv = label(inverted)
+
+        # find the label of the border-connected region
+        # (it touches all 4 edges)
+        border_label = labeled_inv[0, 0]
+
+        # interior = everything that is NOT background and NOT membrane
+        interior = (labeled_inv > 0) & (labeled_inv != border_label)
+
+        save_debug_image(
+            interior.astype(np.uint8) * 255,
+            "06_interior", normalize=False
+        )
+
+        # ── B3: distance transform of interior ──
+        # now peaks are at the centers of GUV interiors
+        distance = sci_ndimage.distance_transform_edt(interior)
+        save_debug_image(
+            distance.astype(np.float32),
+            "07_distance_interior", normalize=True
+        )
+
+        # smooth to avoid many local maxima
+        distance_smooth = gaussian(distance, sigma=max(3, min_radius_px // 10))
+
+        # ── B4: find peaks = GUV centers ──
+        min_peak_distance = max(min_radius_px, 10)
+        coords = peak_local_max(
+            distance_smooth,
+            min_distance=min_peak_distance,
+            labels=interior,
+        )
+
+        save_debug_image(
+            distance_smooth.astype(np.float32),
+            "08_distance_smooth", normalize=True
+        )
+
+        if len(coords) == 0:
+            # fallback: use whole image
+            candidates.append({"x": 0, "y": 0, "w": w, "h": h})
+        else:
+            # ── B5: for each peak, estimate radius and build bounding box ──
+            for (cy_peak, cx_peak) in coords:
+                # estimate radius from the distance value at this peak
+                # distance_transform_edt gives distance to nearest background
+                # for a circular interior, the peak value ≈ interior radius
+                r_est = float(distance_smooth[cy_peak, cx_peak])
+
+                # clamp to user's range
+                r_est = max(min_radius_px, min(max_radius_px, r_est))
+
+                # build bounding box with some margin
+                margin = int(r_est * 0.2)
+                x0 = max(0, int(cx_peak - r_est) - margin)
+                y0 = max(0, int(cy_peak - r_est) - margin)
+                x1 = min(w, int(cx_peak + r_est) + margin)
+                y1 = min(h, int(cy_peak + r_est) + margin)
+
+                candidates.append({
+                    "x": x0,
+                    "y": y0,
+                    "w": x1 - x0,
+                    "h": y1 - y0,
+                })
+
+        # deduplicate overlapping candidates
+        # (two peaks that are very close → one candidate)
+        deduped = []
+        for c in candidates:
+            cx = c["x"] + c["w"] / 2
+            cy = c["y"] + c["h"] / 2
+            too_close = False
+            for d in deduped:
+                dx_c = d["x"] + d["w"] / 2
+                dy_c = d["y"] + d["h"] / 2
+                if np.sqrt((cx - dx_c)**2 + (cy - dy_c)**2) < min_radius_px:
+                    too_close = True
+                    break
+            if not too_close:
+                deduped.append(c)
+        candidates = deduped
+
+    # Strategy C: last resort — use whole image as one candidate
+    if not candidates:
+        candidates.append({
+            "x": 0,
+            "y": 0,
+            "w": w,
+            "h": h,
+        })
+
+    # ── Step 2: precompute angle arrays ──
+    n_points = 360
+    angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    cos_a = np.cos(angles)  # shape (n_points,)
+    sin_a = np.sin(angles)  # shape (n_points,)
+
+    def peripheral_intensity_vectorized(img2d, cx_arr, cy_arr, r_arr):
+        """
+        Vectorized: compute peripheral intensity score for many circles at once.
+
+        Parameters
+        ----------
+        cx_arr, cy_arr : 1D arrays of circle centers (n_circles,)
+        r_arr : 1D array of radii (n_circles,)
+
+        Returns
+        -------
+        scores : 1D array of mean*n_points scores (n_circles,)
+        """
+        n_circles = len(cx_arr)
+
+        # xs[i, j] = x coordinate of circle i at angle j
+        # shape: (n_circles, n_points)
+        xs = cx_arr[:, None] + r_arr[:, None] * cos_a[None, :]
+        ys = cy_arr[:, None] + r_arr[:, None] * sin_a[None, :]
+
+        xs = np.clip(xs, 0, img2d.shape[1] - 1)
+        ys = np.clip(ys, 0, img2d.shape[0] - 1)
+
+        # bilinear interpolation manually (faster than map_coordinates in a loop)
+        x0 = np.floor(xs).astype(np.int32)
+        y0 = np.floor(ys).astype(np.int32)
+        x1 = np.clip(x0 + 1, 0, img2d.shape[1] - 1)
+        y1 = np.clip(y0 + 1, 0, img2d.shape[0] - 1)
+
+        dx = xs - x0
+        dy = ys - y0
+
+        # bilinear interpolation: 4 neighbors
+        v00 = img2d[y0, x0]
+        v01 = img2d[y0, x1]
+        v10 = img2d[y1, x0]
+        v11 = img2d[y1, x1]
+
+        values = (v00 * (1 - dx) * (1 - dy) +
+                  v01 * dx * (1 - dy) +
+                  v10 * (1 - dx) * dy +
+                  v11 * dx * dy)
+
+        # values shape: (n_circles, n_points)
+        # score = mean * n_points = sum
+        scores = values.sum(axis=1)
+        return scores
+
+    # ── Step 3: precompute trig arrays ──
+    n_points = 360
+    angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+
+    def score_circles_batch(img2d, cx_arr, cy_arr, r_arr):
+        """
+        Score many circles at once using vectorized bilinear interpolation.
+        Returns 1D array of scores (sum of intensities along circumference).
+        """
+        n = len(cx_arr)
+        # shape (n, n_points)
+        xs = cx_arr[:, None] + r_arr[:, None] * cos_a[None, :]
+        ys = cy_arr[:, None] + r_arr[:, None] * sin_a[None, :]
+
+        xs = np.clip(xs, 0, img2d.shape[1] - 1)
+        ys = np.clip(ys, 0, img2d.shape[0] - 1)
+
+        # bilinear interpolation
+        x0 = np.floor(xs).astype(np.int32)
+        y0 = np.floor(ys).astype(np.int32)
+        x1 = np.clip(x0 + 1, 0, img2d.shape[1] - 1)
+        y1 = np.clip(y0 + 1, 0, img2d.shape[0] - 1)
+
+        dx = xs - x0
+        dy = ys - y0
+
+        v00 = img2d[y0, x0]
+        v01 = img2d[y0, x1]
+        v10 = img2d[y1, x0]
+        v11 = img2d[y1, x1]
+
+        values = (v00 * (1 - dx) * (1 - dy) +
+                  v01 * dx       * (1 - dy) +
+                  v10 * (1 - dx) * dy       +
+                  v11 * dx       * dy)
+
+        return values.sum(axis=1)
+
+    # ── Step 4: for each candidate, do a focused scan ──
+    circles = []
+    labels_out = np.zeros((h, w), dtype=np.int32)
+    label_counter = 0
+
+    for cand in candidates:
+        x0 = cand["x"]
+        y0 = cand["y"]
+        cw = cand["w"]
+        ch = cand["h"]
+
+        # Estimate center and radius from candidate bounding box
+        cx_est = x0 + cw / 2.0
+        cy_est = y0 + ch / 2.0
+        r_est = min(cw, ch) / 2.0
+
+        # clamp radius estimate to user's range
+        r_est = np.clip(r_est, min_radius_px, max_radius_px)
+
+        # ── Focused search: scan a grid around the estimated center ──
+        # Instead of scanning the full bounding box, scan only a small
+        # window around the estimated center and a small range of radii.
+
+        # center search range: ± search_range_px pixels
+        center_search = int(search_range_px)
+
+        # radius search range: ± search_range_px pixels around estimate
+        r_min_search = max(min_radius_px, r_est - search_range_px)
+        r_max_search = min(max_radius_px, r_est + search_range_px)
+
+        # step sizes
+        # use 1 pixel step for center, 0.5 pixel for radius
+        center_step = max(1, search_range_px // 10)
+        r_step = max(0.5, search_range_px / 20.0)
+
+        # build search grids
+        cx_range = np.arange(
+            cx_est - center_search,
+            cx_est + center_search + center_step,
+            center_step,
+        )
+        cy_range = np.arange(
+            cy_est - center_search,
+            cy_est + center_search + center_step,
+            center_step,
+        )
+        r_range = np.arange(r_min_search, r_max_search + r_step, r_step)
+
+        # clamp to image
+        cx_range = cx_range[(cx_range >= 0) & (cx_range < w)]
+        cy_range = cy_range[(cy_range >= 0) & (cy_range < h)]
+        r_range = r_range[(r_range >= min_radius_px) & (r_range <= max_radius_px)]
+
+        if len(cx_range) == 0 or len(cy_range) == 0 or len(r_range) == 0:
+            continue
+
+        # build all combinations
+        cx_grid, cy_grid, r_grid = np.meshgrid(cx_range, cy_range, r_range)
+        cx_flat = cx_grid.ravel()
+        cy_flat = cy_grid.ravel()
+        r_flat = r_grid.ravel()
+
+        n_circles = len(cx_flat)
+
+        # score in chunks to control memory
+        chunk_size = 10000
+        best_score = -np.inf
+        best_idx = 0
+
+        for start in range(0, n_circles, chunk_size):
+            end = min(start + chunk_size, n_circles)
+            scores = score_circles_batch(
+                img_norm,
+                cx_flat[start:end],
+                cy_flat[start:end],
+                r_flat[start:end],
+            )
+            local_best = int(np.argmax(scores))
+            if scores[local_best] > best_score:
+                best_score = float(scores[local_best])
+                best_idx = start + local_best
+
+        best_cx = float(cx_flat[best_idx])
+        best_cy = float(cy_flat[best_idx])
+        best_r = float(r_flat[best_idx])
+
+        # store result
+        label_counter += 1
+        yy, xx = np.ogrid[:h, :w]
+        circle_mask = ((yy - best_cy) ** 2 + (xx - best_cx) ** 2) <= best_r ** 2
+        fill_mask = circle_mask & (labels_out == 0)
+        labels_out[fill_mask] = label_counter
+
+        area = int(np.sum(circle_mask))
+        circles.append({
+            "label": label_counter,
+            "centroid_y": float(best_cy),
+            "centroid_x": float(best_cx),
+            "radius": int(round(best_r)),
+            "bbox": (
+                max(0, int(best_cy - best_r)),
+                max(0, int(best_cx - best_r)),
+                min(h, int(best_cy + best_r)),
+                min(w, int(best_cx + best_r)),
+            ),
+            "area": area,
+            "equivalent_diameter": float(2 * best_r),
+            "peripheral_score": float(best_score),
+        })
+
+    return labels_out, circles
+
+
+
+
 def segment_hough_circles(
     image: np.ndarray,
     min_radius: int = 50,
@@ -491,7 +1066,8 @@ def segment_cellpose(
     if fit_circles:
         return _convert_masks_to_circles(masks, image.shape)
     else:
-        return masks
+        vesicles = extract_vesicle_info(masks)
+        return masks, vesicles
 
 
 def _convert_masks_to_circles(
@@ -674,6 +1250,8 @@ def segment_frame(
     canny_sigma: float = 2.0,
     hough_min_distance: int = 100,
     hough_threshold_fraction: float = 0.3,
+    weight_search_range: float = 2.0,
+    threshold_method: str = "huang",
     cellpose_gpu: bool = False,
     cellpose_invert: bool = False,
     filter_circularity: float = 0.0,
@@ -698,7 +1276,7 @@ def segment_frame(
     elif method == "cellpose":
         if use_cellpose and CELLPOSE_AVAILABLE:
             try:
-                result = segment_cellpose(
+                labels, vesicles = segment_cellpose(
                     image,
                     model_type=model_type,
                     diameter=diameter,
@@ -710,13 +1288,7 @@ def segment_frame(
                     preprocess_transmitted=preprocess_transmitted,
                     fit_circles=fit_circles,
                 )
-                if fit_circles:
-                    labels, vesicles = result
-                    return labels, vesicles
-                else:
-                    masks = result
-                    vesicles = extract_vesicle_info(masks)
-                    return masks, vesicles
+                return labels, vesicles
             except Exception:
                 pass
         labels = segment_otsu_watershed(image, min_area=min_area)
@@ -737,7 +1309,17 @@ def segment_frame(
             max_circles=20,
         )
         return labels, vesicles
-
+    elif method == "weighted_intensity":
+        labels, vesicles = segment_weighted_intensity(
+            image,
+            min_radius_px=min_radius,
+            max_radius_px=max_radius,
+            search_range_px=weight_search_range,
+            min_circularity=filter_circularity if filter_circularity > 0 else 0.60,
+            max_circularity=1.0,
+            threshold_method = threshold_method,
+        )
+        return labels, vesicles
     else:
         raise ValueError(f"Unknown segmentation method: {method}")
 
@@ -875,9 +1457,12 @@ def process_vesicle_detection(
     preprocess_transmitted: bool = False,
     fit_circles: bool = False,
     fallback_pixel_size_um: Optional[float] = None,
+    weight_search_range: float = 2.0,
+    threshold_method: str = 'huang',
     selected_labels: Optional[List[int]] = None,
     progress_queue=None,
     cancel_event=None,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     """
     Full vesicle detection + cropping pipeline.
@@ -899,7 +1484,11 @@ def process_vesicle_detection(
             "Pixel size not found in CZI metadata and no fallback provided. "
             "Please enter a fallback pixel size."
         )
-
+    # right after pixel_size_um is confirmed valid:
+    if debug:
+        debug_dir = enable_debug_saving(czi_path)
+       
+        
     # Convert µm → pixels
     crop_margin_px = um_to_px(crop_margin_um, pixel_size_um)
     min_radius_px = um_to_px(min_radius_um, pixel_size_um)
@@ -907,7 +1496,7 @@ def process_vesicle_detection(
     radius_step_px = max(1, um_to_px(radius_step_um, pixel_size_um))
     hough_min_distance_px = um_to_px(hough_min_distance_um, pixel_size_um)
     min_area_px = max(1, int(round(min_area_um2 / (pixel_size_um ** 2))))
-
+    weight_search_range_px = um_to_px(weight_search_range, pixel_size_um)
    
     
     # Cellpose diameter: if provided in µm, convert
@@ -941,6 +1530,8 @@ def process_vesicle_detection(
             canny_sigma=canny_sigma,
             hough_min_distance=hough_min_distance_px,
             hough_threshold_fraction=hough_threshold_fraction,
+            weight_search_range = weight_search_range_px,
+            threshold_method=threshold_method,
             cellpose_gpu=cellpose_gpu,
             cellpose_invert=cellpose_invert,
             filter_circularity=filter_circularity,
@@ -1000,8 +1591,15 @@ def process_vesicle_detection(
                 canny_sigma=canny_sigma,
                 hough_min_distance=hough_min_distance_px,
                 hough_threshold_fraction=hough_threshold_fraction,
+                weight_search_range = weight_search_range_px,
+                threshold_method=threshold_method,
                 cellpose_gpu=cellpose_gpu,
                 cellpose_invert=cellpose_invert,
+                filter_circularity=filter_circularity,
+                filter_eccentricity=filter_eccentricity,
+                filter_solidity=filter_solidity,
+                preprocess_transmitted=preprocess_transmitted,
+                fit_circles=fit_circles,
             )
 
             for sel_lbl in selected_labels:
