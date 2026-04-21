@@ -20,7 +20,7 @@
 - Support for **single-file** and **batch** processing
 - Export of numerical outputs and publication-quality **SVG** figures
 - Model-based fitting for correlation curves and recovery experiments
-- GUV detection with multiple methods including the Kohyama et al. 2022 weighted peripheral intensity method
+- GUV detection with multiple methods including the improved and modified version of Kohyama et al. 2022 weighted peripheral intensity method
 - Membrane straightening and intensity heatmaps for GUV time series
 - Session saving/loading and central logging inside the GUI
 
