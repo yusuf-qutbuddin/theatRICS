@@ -238,6 +238,44 @@ If that structure is missing, condition summary generation may be skipped.
 
 ---
 
+## Vesicle Finder
+
+### No vesicles detected
+- Try a different threshold method (`mean` or `triangle` recommended for membrane images)
+- Check that the min/max radius range covers the actual vesicle sizes
+- Enable debug images to see which processing step fails
+- For Hough: lower the threshold fraction
+
+### Only one vesicle detected instead of several
+- Check `08_distance_smooth.tif` — it should show one bright peak per GUV
+- If peaks are merged, the GUVs may be too close together
+- Try increasing the min distance parameter
+
+### Vesicle detection is slow
+- Reduce the search range
+- Install OpenCV for faster Hough detection: `pip install opencv-python`
+- The weighted intensity method uses a focused vectorized search and should be fast for typical numbers of GUVs
+
+### Cellpose finds an arc instead of a full circle
+- Enable **Fit circles to detected masks** in the Cellpose parameters
+- This fits a geometric circle using least-squares and reconstructs the full GUV
+
+### Membrane straightening not available
+- Straightening requires vesicles with a known radius
+- Use Hough, weighted intensity, or Cellpose with fit circles enabled
+- Otsu detections do not produce radius estimates
+
+### Debug images are not saved
+- Ensure the **Save debug images** checkbox is checked before clicking Detect Vesicles
+- Check that the output directory next to the CZI file is writable
+
+### Pixel size missing
+- Enter a fallback pixel size in the Fallback pixel size field
+- Without pixel size, µm parameters cannot be converted to pixels and detection will fail
+
+---
+
+
 ## GUI responsiveness and background tasks
 
 ### Progress bar moves but the GUI feels frozen

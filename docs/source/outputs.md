@@ -267,6 +267,54 @@ depending on workflow and implementation.
 
 ---
 
+## Vesicle Finder outputs
+
+### Crop outputs
+
+For a CZI file named `sample.czi`, square crop outputs are written to:
+
+```text
+sample_vesicle_crops/
+    vesicle_1.tif
+    vesicle_3.tif
+```
+
+Each TIFF contains all selected frames stacked along axis 0 with shape `(n_frames, crop_size, crop_size)`.
+
+### Straightening outputs
+
+For a CZI file named `sample.czi`, straightening outputs are written to:
+
+```text
+sample_straightened/
+    vesicle_1_straightened.tif
+    vesicle_1_intensity_profile.csv
+    vesicle_1_total_intensity.csv
+    straighten_overview.svg
+```
+
+| File | Contents |
+|------|----------|
+| `*_straightened.tif` | 3D TIFF: `(n_frames, thickness_px, n_angle_points)` — the unrolled membrane |
+| `*_intensity_profile.csv` | Mean intensity across thickness for each angle and frame |
+| `*_total_intensity.csv` | Total membrane intensity per frame |
+| `straighten_overview.svg` | Combined display figure |
+
+### Debug outputs
+
+When debug saving is enabled, intermediate images are saved to:
+
+```text
+sample_debug/
+    01_raw_normalized.tif
+    04_binary_after_threshold.tif
+    05_binary_dilated.tif
+    06_interior.tif
+    07_distance_interior.tif
+    08_distance_smooth.tif
+```
+---
+
 ## Notes on file placement
 
 ### Local `Results/` folders

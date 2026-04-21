@@ -3150,7 +3150,7 @@ class ModularRICSGUI:
             else:
                 self.log_message(f"Hough detection ({self.vesicle_method.get()}): using skimage")
         if self.vesicle_method.get() == "weighted_intensity":
-            self.log_message("Detection: weighted peripheral intensity method (Kohyama et al. 2022)")
+            self.log_message("Detection: weighted peripheral intensity method (improved and modified from Kohyama et al. 2022)")
         if self.vesicle_method.get() == "hough":
             from theatrics.vesicle.detection import OPENCV_AVAILABLE
             if OPENCV_AVAILABLE:

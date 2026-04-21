@@ -226,6 +226,40 @@ Typical outputs include:
 
 ---
 
+
+## Workflow 6: Vesicle / GUV detection and membrane analysis
+
+Use this workflow to detect GUVs in CZI microscopy data and analyze their membranes.
+
+### Detection
+1. Open the **Vesicle Finder** tab.
+2. Select a CZI file.
+3. Choose the detection channel.
+4. Select the detection method:
+   - **hough**: for fluorescence membrane images (bright ring)
+   - **hough_transmitted**: for transmitted-light images
+   - **weighted_intensity**: for both image types, improved and modified from Kohyama et al. 2022
+   - **cellpose**: for filled or ring-shaped objects with deep learning
+5. Set radius range in µm.
+6. Click **Detect Vesicles**.
+7. Click on detected vesicles to select them (selected = green, unselected = cyan).
+
+### Cropping
+Click **Crop Selected** or **Export All** to export square crops for each selected vesicle across all frames.
+
+### Membrane straightening
+1. After detection, set the membrane thickness in µm.
+2. Choose the intensity channel (can differ from the detection channel).
+3. Click **Straighten Selected** or **Straighten All**.
+4. The display shows the unrolled membrane strip, intensity heatmap, and total intensity trace.
+
+### Troubleshooting detection
+- Enable **Save debug images** to inspect intermediate processing steps.
+- Check `08_distance_smooth.tif` to verify that one bright peak per GUV is visible.
+- If only one vesicle is detected instead of several, try reducing the min radius or adjusting the threshold method.
+- If detection is slow, reduce the search range parameter.
+---
+
 ## Monitoring progress
 
 During long-running jobs, the GUI provides:

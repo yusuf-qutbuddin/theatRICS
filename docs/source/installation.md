@@ -169,7 +169,17 @@ Also requires:
 - `scikit-image`
 - `openpyxl`
 - `pylibCZIrw`
+### Vesicle Finder
+Requires the standard stack plus optionally:
+- `opencv-python` for faster Hough circle detection
+- `cellpose` for deep learning segmentation
 
+
+Install optional vesicle dependencies:
+
+```bash
+pip install opencv-python cellpose 
+```
 ---
 
 ## Install documentation dependencies

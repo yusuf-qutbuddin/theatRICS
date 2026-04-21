@@ -307,6 +307,47 @@ This tab is used for ROI-based FRAP analysis from annotated CZI time series.
 
 ---
 
+## Vesicle Finder
+
+The **Vesicle Finder** tab detects vesicles (such as GUVs) in CZI images or time series, allows interactive selection, and exports either square crops or unrolled membrane strips.
+
+### Supported modes
+- **Single-frame detection**: detect vesicles in frame 0 and display interactively
+- **Batch cropping**: export selected vesicles across all selected frames
+- **Membrane straightening**: unroll the membrane ring into a flat strip for intensity analysis
+
+### Detection methods
+- `hough`: Hough circle transform, best for fluorescence membrane images
+- `hough_transmitted`: gradient-based Hough, best for transmitted-light images
+- `weighted_intensity`: peripheral intensity maximization (improved and modified from Kohyama et al. 2022), robust for both image types
+- `cellpose`: deep learning segmentation with optional shape filtering and circle fitting
+- `otsu`: simple threshold-based fallback
+
+### All spatial parameters in µm
+Pixel size is read automatically from CZI metadata. All radius, distance, and margin parameters are entered in µm and converted to pixels internally.
+
+### Display
+- Left panel: raw image with detected vesicle overlays (circles or contours)
+- Right panel: segmentation label map
+
+### Membrane straightening
+For each detected vesicle with a known radius, the software can unroll the annular membrane region into a flat strip. The output shows:
+- the straightened membrane image (frame 0)
+- a heatmap of intensity vs position along membrane vs time
+- total membrane intensity vs time
+
+### Debug images
+Enabling **Save debug images** writes intermediate processing images to a debug folder alongside the CZI file. This is useful for diagnosing detection failures.
+
+### Outputs
+- Square crop TIFFs per selected vesicle (all frames)
+- Straightened membrane TIFFs per vesicle
+- Intensity profile CSVs per vesicle
+- Total intensity CSV per vesicle
+- Overview SVG figure
+
+---
+
 ## Results & Logs
 
 The **Results & Logs** tab collects textual output from all workflows.
