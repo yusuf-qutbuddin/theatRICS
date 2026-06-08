@@ -22,6 +22,7 @@ DEFAULT_FRAP_CONFIG = {
     "frap_pattern": "*FRAP*.czi",
     "pixel_size_um": None,
     "imaging_bleach": True,
+    "no_control": False, 
     "init": {
         "F_0": None,
         "f_bl": None,
@@ -54,6 +55,20 @@ def read_pixel_size_um(root):
                         except ValueError:
                             pass
     return None
+
+def normalise_without_control(raw_traces, bleach_frame):
+    """
+    Normalise each trace to its own pre-bleach mean.
+    Returns norm_traces and ctrl_norm=None to signal no control was used.
+    """
+    norm_traces = []
+    for tr in raw_traces:
+        tr = tr.astype(float)
+        pre_mean = float(np.nanmean(tr[:bleach_frame])) if bleach_frame > 0 else float(tr[0])
+        if pre_mean <= 0:
+            pre_mean = 1.0
+        norm_traces.append(tr / pre_mean)
+    return norm_traces, None
 
 
 def normalise_with_control(raw_traces, ctrl_idx, bleach_frame):
@@ -264,7 +279,7 @@ def save_raw_excel(path, t_all, dt, rois, raw_traces, norm_traces,
 
 
 def save_summary_excel(path, rois, frap_idxs, fit_results,
-                       bleach_frame, dt, czi_name, pixel_size_um, imaging_bleach):
+                       bleach_frame, dt, czi_name, pixel_size_um, imaging_bleach, ctrl_idx=None):
     wb = Workbook()
     ws = wb.active
     ws.title = 'FRAP Summary'
@@ -274,12 +289,20 @@ def save_summary_excel(path, rois, frap_idxs, fit_results,
     ws['A1'].font = Font(bold=True, size=12)
 
     px_label = f'{pixel_size_um:.6f} µm' if pixel_size_um else 'not found in metadata'
-    meta = [('Bleach frame', bleach_frame),
-            ('Bleach time (s)', round(bleach_frame * dt, 4)),
-            ('Frame interval (s)', round(dt, 5)),
-            ('Model', 'Diff_2D_InfReservoir' + (' + IB' if imaging_bleach else ', no IB')),
-            ('Control normalisation', 'YES — each FRAP trace divided by ctrl/ctrl_pre_mean'),
-            ('Pixel size (µm)', px_label)]
+    ctrl_label = (
+        'NONE — each trace normalised to own pre-bleach mean'
+        if ctrl_idx is None
+        else 'YES — each FRAP trace divided by ctrl/ctrl_pre_mean'
+    )
+
+    meta = [
+        ('Bleach frame', bleach_frame),
+        ('Bleach time (s)', round(bleach_frame * dt, 4)),
+        ('Frame interval (s)', round(dt, 5)),
+        ('Model', 'Diff_2D_InfReservoir' + (' + IB' if imaging_bleach else ', no IB')),
+        ('Control normalisation', ctrl_label),
+        ('Pixel size (µm)', px_label),
+    ]
     for i, (lbl, val) in enumerate(meta, 2):
         ws.cell(i, 1, lbl).font = bold
         ws.cell(i, 2, val)
@@ -477,6 +500,7 @@ def analyse_frap(czi_path, config=None):
 
     # ── Validate ROI count ──
     n_rois_expected = config.get("n_rois", None)
+    no_control = config.get("no_control", False)
 
     if n_rois_expected is not None:
         if len(rois) < n_rois_expected:
@@ -488,8 +512,10 @@ def analyse_frap(czi_path, config=None):
             # use only the first n_rois_expected ROIs
             rois = rois[:n_rois_expected]
 
-    if len(rois) < 2:
-        raise RuntimeError(f"{len(rois)} ROI(s) found — need at least 2.")
+    if not no_control and len(rois) < 2:
+        raise RuntimeError(f"{len(rois)} ROI(s) found — need at least 2 (1 FRAP + 1 control).")
+    if no_control and len(rois) < 1:
+        raise RuntimeError("No ROIs found in metadata.")
 
     # ── Extract traces ──
     def trace(cx, cy, r):
@@ -507,25 +533,36 @@ def analyse_frap(czi_path, config=None):
     # ── Identify control ROI ──
     user_ctrl_idx = config.get("ctrl_idx", None)
 
-    if user_ctrl_idx is not None:
+    if no_control:
+        ctrl_idx = None
+        frap_idxs = list(range(len(raw_traces)))
+    elif user_ctrl_idx is not None:
         if user_ctrl_idx < 0 or user_ctrl_idx >= len(rois):
             raise RuntimeError(
                 f"Control ROI index {user_ctrl_idx} is out of range. "
                 f"Valid range: 0 to {len(rois) - 1}."
             )
         ctrl_idx = user_ctrl_idx
+        frap_idxs = [i for i in range(len(raw_traces)) if i != ctrl_idx]
     else:
         # auto-detect: ROI with smallest bleach drop
         def fdrop(tr, bf):
-            return (np.mean(tr[:bf]) - np.mean(tr[bf:bf + 3])) / (np.mean(tr[:bf]) + 1e-9)
+            return (
+                (np.mean(tr[:bf]) - np.mean(tr[bf:bf + 3]))
+                / (np.mean(tr[:bf]) + 1e-9)
+            )
 
         drops = [fdrop(tr, bleach_frame) for tr in raw_traces]
         ctrl_idx = int(np.argmin(drops))
-
-    frap_idxs = [i for i in range(len(raw_traces)) if i != ctrl_idx]
+        frap_idxs = [i for i in range(len(raw_traces)) if i != ctrl_idx]
 
     # ── Normalise ──
-    norm_traces, ctrl_norm = normalise_with_control(raw_traces, ctrl_idx, bleach_frame)
+    if no_control or ctrl_idx is None:
+        norm_traces, ctrl_norm = normalise_without_control(raw_traces, bleach_frame)
+    else:
+        norm_traces, ctrl_norm = normalise_with_control(
+            raw_traces, ctrl_idx, bleach_frame
+        )
 
     
     colors = ROI_COLORS[:len(frap_idxs)]
@@ -549,7 +586,7 @@ def analyse_frap(czi_path, config=None):
     xls2 = czi_path.with_name(czi_path.stem + '_FRAP_summary.xlsx')
     save_summary_excel(
         xls2, rois, frap_idxs, fit_results,
-        bleach_frame, dt, czi_path.name, pixel_size_um, config["imaging_bleach"]
+        bleach_frame, dt, czi_path.name, pixel_size_um, config["imaging_bleach"],ctrl_idx=ctrl_idx,
     )
 
     return {
@@ -561,10 +598,15 @@ def analyse_frap(czi_path, config=None):
         "dt": dt,
         "pixel_size_um": pixel_size_um,
         "ctrl_idx": ctrl_idx,
+        "no_control": no_control,
+        "ctrl_idx_source": (
+            "none"  if no_control
+            else "user" if user_ctrl_idx is not None
+            else "auto"
+        ),
         "frap_idxs": frap_idxs,
         "rois": rois,
         "n_rois_in_metadata": len(rois),
-        "ctrl_idx_source": "user" if user_ctrl_idx is not None else "auto",
         "fit_results": fit_results,
         "t_all": t_all.tolist(),
         "raw_traces": [tr.tolist() for tr in raw_traces],

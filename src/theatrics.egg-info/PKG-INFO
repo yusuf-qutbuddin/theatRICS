@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: theatrics
-Version: 1.6.1
+Version: 1.6.2
 Summary: GUI for RICS, SFCS, FCS Fitting, FRAP, and vesicle analysis
 Author-email: Yusuf Qutbuddin <yusuf.qutbuddin@gmail.com>
 License: BSD 3-Clause License
@@ -82,7 +82,7 @@ Dynamic: license-file
 - Support for **single-file** and **batch** processing
 - Export of numerical outputs and publication-quality **SVG** figures
 - Model-based fitting for correlation curves and recovery experiments
-- GUV detection with multiple methods including the Kohyama et al. 2022 weighted peripheral intensity method
+- GUV detection with multiple methods including the improved and modified version of Kohyama et al. 2022 weighted peripheral intensity method
 - Membrane straightening and intensity heatmaps for GUV time series
 - Session saving/loading and central logging inside the GUI
 

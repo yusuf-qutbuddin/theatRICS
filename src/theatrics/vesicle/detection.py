@@ -306,113 +306,113 @@ def segment_weighted_intensity(
     # Strategy B: if no candidates found, use bounding boxes of
     # spatially clustered bright pixels
     # This handles thin membrane arcs which are individually small
-    if not candidates:
-        from skimage.morphology import binary_dilation, binary_erosion, disk as dsk
-        from skimage.segmentation import watershed
-        from skimage.feature import peak_local_max
-        from scipy import ndimage as sci_ndimage
-        from skimage.filters import gaussian
+    # if not candidates:
+    from skimage.morphology import binary_dilation, binary_erosion, disk as dsk
+    from skimage.segmentation import watershed
+    from skimage.feature import peak_local_max
+    from scipy import ndimage as sci_ndimage
+    from skimage.filters import gaussian
 
-        # ── B1: dilate membrane to close gaps in arcs ──
-        dilation_radius = max(3, min_radius_px // 8)
-        binary_dilated = binary_dilation(binary, dsk(dilation_radius))
-        save_debug_image(
-            binary_dilated.astype(np.uint8) * 255,
-            "05_binary_dilated", normalize=False
-        )
+    # ── B1: dilate membrane to close gaps in arcs ──
+    dilation_radius = max(3, min_radius_px // 8)
+    binary_dilated = binary_dilation(binary, dsk(dilation_radius))
+    save_debug_image(
+        binary_dilated.astype(np.uint8) * 255,
+        "05_binary_dilated", normalize=False
+    )
 
-        # ── B2: fill the interior of each ring ──
-        # flood-fill from the border: anything reachable from the border
-        # without crossing a membrane pixel is "exterior"
-        # everything else is "interior" of a GUV
-        from scipy.ndimage import binary_fill_holes
+    # ── B2: fill the interior of each ring ──
+    # flood-fill from the border: anything reachable from the border
+    # without crossing a membrane pixel is "exterior"
+    # everything else is "interior" of a GUV
+    from scipy.ndimage import binary_fill_holes
 
-        # invert: background becomes foreground
-        inverted = ~binary_dilated
+    # invert: background becomes foreground
+    inverted = ~binary_dilated
 
-        # label connected components of the inverted image
-        labeled_inv = label(inverted)
+    # label connected components of the inverted image
+    labeled_inv = label(inverted)
 
-        # find the label of the border-connected region
-        # (it touches all 4 edges)
-        border_label = labeled_inv[0, 0]
+    # find the label of the border-connected region
+    # (it touches all 4 edges)
+    border_label = labeled_inv[0, 0]
 
-        # interior = everything that is NOT background and NOT membrane
-        interior = (labeled_inv > 0) & (labeled_inv != border_label)
+    # interior = everything that is NOT background and NOT membrane
+    interior = (labeled_inv > 0) & (labeled_inv != border_label)
 
-        save_debug_image(
-            interior.astype(np.uint8) * 255,
-            "06_interior", normalize=False
-        )
+    save_debug_image(
+        interior.astype(np.uint8) * 255,
+        "06_interior", normalize=False
+    )
 
-        # ── B3: distance transform of interior ──
-        # now peaks are at the centers of GUV interiors
-        distance = sci_ndimage.distance_transform_edt(interior)
-        save_debug_image(
-            distance.astype(np.float32),
-            "07_distance_interior", normalize=True
-        )
+    # ── B3: distance transform of interior ──
+    # now peaks are at the centers of GUV interiors
+    distance = sci_ndimage.distance_transform_edt(interior)
+    save_debug_image(
+        distance.astype(np.float32),
+        "07_distance_interior", normalize=True
+    )
 
-        # smooth to avoid many local maxima
-        distance_smooth = gaussian(distance, sigma=max(3, min_radius_px // 10))
+    # smooth to avoid many local maxima
+    distance_smooth = gaussian(distance, sigma=max(3, min_radius_px // 10))
 
-        # ── B4: find peaks = GUV centers ──
-        min_peak_distance = max(min_radius_px, 10)
-        coords = peak_local_max(
-            distance_smooth,
-            min_distance=min_peak_distance,
-            labels=interior,
-        )
+    # ── B4: find peaks = GUV centers ──
+    min_peak_distance = max(min_radius_px, 10)
+    coords = peak_local_max(
+        distance_smooth,
+        min_distance=min_peak_distance,
+        labels=interior,
+    )
 
-        save_debug_image(
-            distance_smooth.astype(np.float32),
-            "08_distance_smooth", normalize=True
-        )
+    save_debug_image(
+        distance_smooth.astype(np.float32),
+        "08_distance_smooth", normalize=True
+    )
 
-        if len(coords) == 0:
-            # fallback: use whole image
-            candidates.append({"x": 0, "y": 0, "w": w, "h": h})
-        else:
-            # ── B5: for each peak, estimate radius and build bounding box ──
-            for (cy_peak, cx_peak) in coords:
-                # estimate radius from the distance value at this peak
-                # distance_transform_edt gives distance to nearest background
-                # for a circular interior, the peak value ≈ interior radius
-                r_est = float(distance_smooth[cy_peak, cx_peak])
+    if len(coords) == 0:
+        # fallback: use whole image
+        candidates.append({"x": 0, "y": 0, "w": w, "h": h})
+    else:
+        # ── B5: for each peak, estimate radius and build bounding box ──
+        for (cy_peak, cx_peak) in coords:
+            # estimate radius from the distance value at this peak
+            # distance_transform_edt gives distance to nearest background
+            # for a circular interior, the peak value ≈ interior radius
+            r_est = float(distance_smooth[cy_peak, cx_peak])
 
-                # clamp to user's range
-                r_est = max(min_radius_px, min(max_radius_px, r_est))
+            # clamp to user's range
+            r_est = max(min_radius_px, min(max_radius_px, r_est))
 
-                # build bounding box with some margin
-                margin = int(r_est * 0.2)
-                x0 = max(0, int(cx_peak - r_est) - margin)
-                y0 = max(0, int(cy_peak - r_est) - margin)
-                x1 = min(w, int(cx_peak + r_est) + margin)
-                y1 = min(h, int(cy_peak + r_est) + margin)
+            # build bounding box with some margin
+            margin = int(r_est * 0.2)
+            x0 = max(0, int(cx_peak - r_est) - margin)
+            y0 = max(0, int(cy_peak - r_est) - margin)
+            x1 = min(w, int(cx_peak + r_est) + margin)
+            y1 = min(h, int(cy_peak + r_est) + margin)
 
-                candidates.append({
-                    "x": x0,
-                    "y": y0,
-                    "w": x1 - x0,
-                    "h": y1 - y0,
-                })
+            candidates.append({
+                "x": x0,
+                "y": y0,
+                "w": x1 - x0,
+                "h": y1 - y0,
+            })
 
-        # deduplicate overlapping candidates
-        # (two peaks that are very close → one candidate)
-        deduped = []
-        for c in candidates:
-            cx = c["x"] + c["w"] / 2
-            cy = c["y"] + c["h"] / 2
-            too_close = False
-            for d in deduped:
-                dx_c = d["x"] + d["w"] / 2
-                dy_c = d["y"] + d["h"] / 2
-                if np.sqrt((cx - dx_c)**2 + (cy - dy_c)**2) < min_radius_px:
-                    too_close = True
-                    break
-            if not too_close:
-                deduped.append(c)
-        candidates = deduped
+    # deduplicate overlapping candidates
+    # (two peaks that are very close → one candidate)
+    deduped = []
+    for c in candidates:
+        cx = c["x"] + c["w"] / 2
+        cy = c["y"] + c["h"] / 2
+        too_close = False
+        for d in deduped:
+            dx_c = d["x"] + d["w"] / 2
+            dy_c = d["y"] + d["h"] / 2
+            if np.sqrt((cx - dx_c)**2 + (cy - dy_c)**2) < min_radius_px:
+                too_close = True
+                break
+        if not too_close:
+            deduped.append(c)
+    candidates = deduped
 
     # Strategy C: last resort — use whole image as one candidate
     if not candidates:

@@ -659,11 +659,22 @@ class ModularRICSGUI:
         self.frap_n_rois = tk.StringVar(value="")
         ttk.Entry(params_frame, textvariable=self.frap_n_rois, width=10).grid(row=row, column=1, sticky="w")
 
+        
         row += 1
         ttk.Label(params_frame, text="Control ROI index (0-based):").grid(row=row, column=0, sticky="w")
         self.frap_ctrl_idx = tk.StringVar(value="")
-        ttk.Entry(params_frame, textvariable=self.frap_ctrl_idx, width=10).grid(row=row, column=1, sticky="w")
+        self.frap_ctrl_idx_entry = ttk.Entry(params_frame, textvariable=self.frap_ctrl_idx, width=10)
+        self.frap_ctrl_idx_entry.grid(row=row, column=1, sticky="w")
 
+        row += 1
+        self.frap_no_control = tk.BooleanVar(value=False)
+        frap_no_ctrl_cb = ttk.Checkbutton(
+            params_frame,
+            text="No control ROI (normalise to own pre-bleach mean)",
+            variable=self.frap_no_control,
+            command=self._on_frap_no_control_toggle,
+        )
+        frap_no_ctrl_cb.grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         btn_frame = ttk.Frame(params_frame)
         btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
@@ -696,7 +707,13 @@ class ModularRICSGUI:
         if folder:
             self.frap_folder.set(folder)
 
-
+    def _on_frap_no_control_toggle(self):
+        """Disable control ROI index field when no-control mode is selected."""
+        if self.frap_no_control.get():
+            self.frap_ctrl_idx_entry.configure(state="disabled")
+            self.frap_ctrl_idx.set("")        # clear any stale value
+        else:
+            self.frap_ctrl_idx_entry.configure(state="normal")
     
 
     def create_fitting_tab(self):
@@ -2341,8 +2358,9 @@ class ModularRICSGUI:
             "frap_pattern": self.frap_pattern.get(),
             "pixel_size_um": pixel_size_um,
             "imaging_bleach": bool(self.frap_imaging_bleach.get()),
+            "no_control": bool(self.frap_no_control.get()),
             "n_rois": int(n_rois_text) if n_rois_text else None,
-            "ctrl_idx": int(ctrl_idx_text) if ctrl_idx_text else None,
+            "ctrl_idx": int(ctrl_idx_text) if ctrl_idx_text and not self.frap_no_control.get() else None,
             "init": {
                 "F_0": None,
                 "f_bl": None,
@@ -2404,7 +2422,11 @@ class ModularRICSGUI:
         bleach_frame = int(res["bleach_frame"])
         raw_traces = [np.asarray(x, dtype=float) for x in res["raw_traces"]]
         norm_traces = [np.asarray(x, dtype=float) for x in res["norm_traces"]]
-        ctrl_idx = int(res["ctrl_idx"])
+
+        # ── ctrl_idx may now be None ──
+        ctrl_idx = res.get("ctrl_idx")          # None in no-control mode
+        no_control = res.get("no_control", False)
+
         frap_idxs = list(res["frap_idxs"])
         fit_results = res["fit_results"]
         colors = res["roi_colors"]
@@ -2413,8 +2435,10 @@ class ModularRICSGUI:
         tb_s = bleach_frame * dt
         T = t_all[-1] - t_all[0]
 
+        model_label = ' + imaging bleach' if imaging_bleach else 'no imaging bleach'
+        ctrl_label = ' | no control ROI' if no_control else ''
         self.frap_fig.suptitle(
-            f"{stem}   [{' + imaging bleach' if imaging_bleach else 'no imaging bleach'}]",
+            f"{stem}   [{model_label}{ctrl_label}]",
             fontsize=12, fontweight='bold', color='#1A1A2E', y=0.99
         )
 
@@ -2431,15 +2455,22 @@ class ModularRICSGUI:
             ax.text(tb_s + T * 0.01, yl[1] * 0.98, 'bleach',
                     fontsize=7, color='#999999', va='top')
 
+        # ── Panel A: raw traces ──
         _style(axA, 'Raw intensity (pre-normalisation)', 'Time [s]', 'Mean intensity [counts]')
-        axA.plot(t_all, raw_traces[ctrl_idx], color='#AAAAAA', lw=1.5, ls='--',
-                 label=f'ROI {ctrl_idx+1} — control')
+
+        if ctrl_idx is not None:
+            # draw control trace in grey
+            axA.plot(t_all, raw_traces[ctrl_idx], color='#AAAAAA', lw=1.5, ls='--',
+                     label=f'ROI {ctrl_idx+1} — control')
+
         for k, fi in enumerate(frap_idxs):
             axA.plot(t_all, raw_traces[fi], color=colors[k], lw=2, label=f'ROI {fi+1} — FRAP')
+
         axA.autoscale(axis='y')
         _vline(axA)
         axA.legend(fontsize=8, frameon=False)
 
+        # ── Panels B, C, D: unchanged — ctrl_idx not needed ──
         _style(axB, 'Normalised fit', 'Time [s]', 'Normalised intensity [counts]')
         xs = np.linspace(0, len(t_all) - 1, 1000)
         ts = xs * dt
@@ -2448,7 +2479,8 @@ class ModularRICSGUI:
                 continue
             popt = fit_results[k][0]
             axB.plot(t_all, norm_traces[fi], 'o', color=colors[k], ms=2.5, alpha=0.35)
-            axB.plot(ts, frap_analysis.evaluate_model(xs, popt, imaging_bleach), '-', color=colors[k], lw=2.2,
+            axB.plot(ts, frap_analysis.evaluate_model(xs, popt, imaging_bleach), '-',
+                     color=colors[k], lw=2.2,
                      label=(f'ROI {fi+1}: Mobile fraction={popt[4]:.2f}, '
                             f't½={fit_results[k][2]:.2f} s'))
             if imaging_bleach:
@@ -2477,8 +2509,8 @@ class ModularRICSGUI:
             with np.errstate(invalid='ignore', divide='ignore'):
                 corr = (raw_post / (ib_post + 1e-9) - (1.0 - f_bl_f)) / (f_bl_f + 1e-9)
 
-            axC.plot(t_post, np.clip(corr, -0.3, f_mob_f * 1.4), 'o', color=colors[k], ms=2.5, alpha=0.4)
-
+            axC.plot(t_post, np.clip(corr, -0.3, f_mob_f * 1.4),
+                     'o', color=colors[k], ms=2.5, alpha=0.4)
             S_fit = frap_analysis._soumpasis(x_abs, x_0f, R_f, D_f)
             axC.plot(t_rel, f_mob_f * S_fit, '-', color=colors[k], lw=2.2,
                      label=(f'ROI {fi+1}: Mobile fraction={f_mob_f:.2f}, '
@@ -2487,7 +2519,10 @@ class ModularRICSGUI:
             axC.axvline(fit_results[k][2], color=colors[k], lw=0.8, ls=':', alpha=0.65)
 
         axC.set_xlim(left=0)
-        max_fm = max((fit_results[k][0][4] for k in range(len(frap_idxs)) if fit_results[k] is not None), default=1.0)
+        max_fm = max(
+            (fit_results[k][0][4] for k in range(len(frap_idxs)) if fit_results[k] is not None),
+            default=1.0
+        )
         axC.set_ylim(-0.3, max_fm * 1.3)
         axC.legend(fontsize=8, frameon=False)
 
@@ -2501,12 +2536,14 @@ class ModularRICSGUI:
             post_i = np.arange(bleach_frame, len(t_all), dtype=float)
             t_post = (post_i - bleach_frame) * dt
             pre_mu = float(np.nanmean(norm_traces[fi][:bleach_frame])) + 1e-9
-            resid = (norm_traces[fi][bleach_frame:].astype(float) - frap_analysis.evaluate_model(post_i, popt, imaging_bleach)) / pre_mu
+            resid = (norm_traces[fi][bleach_frame:].astype(float)
+                     - frap_analysis.evaluate_model(post_i, popt, imaging_bleach)) / pre_mu
             all_r.extend(resid.tolist())
             win = max(3, len(resid) // 15)
             if len(resid) > win * 2:
                 rm = np.convolve(resid, np.ones(win) / win, mode='valid')
-                axD.plot(t_post[win // 2: win // 2 + len(rm)], rm, '-', color=colors[k], lw=1.8, label=f'ROI {fi+1}')
+                axD.plot(t_post[win // 2: win // 2 + len(rm)], rm,
+                         '-', color=colors[k], lw=1.8, label=f'ROI {fi+1}')
 
         axD.set_xlim(left=0)
         ylim = max(0.12, np.percentile(np.abs(all_r), 99) * 1.3) if all_r else 0.12
@@ -2515,7 +2552,6 @@ class ModularRICSGUI:
 
         self.frap_canvas.draw()
 
-        # save SVG from GUI figure only
         czi_path = Path(res["czi_path"])
         svg_path = czi_path.with_name(czi_path.stem + "_FRAP_overview.svg")
         self.frap_fig.savefig(svg_path, dpi=300, bbox_inches='tight', facecolor='white')
@@ -3236,7 +3272,7 @@ class ModularRICSGUI:
         ax2.imshow(labels, cmap="nipy_spectral", interpolation="nearest")
         ax2.set_title("Segmentation labels")
         ax2.axis("off")
-        # self.vesicle_fig.tight_layout()
+        self.vesicle_fig.tight_layout()
         self.vesicle_canvas.draw()
 
     # ---- CLICK ON IMAGE ----
@@ -3357,7 +3393,7 @@ class ModularRICSGUI:
         thickness_um = result.get("thickness_um", 2.0)
 
         self.vesicle_fig.clear()
-        self.vesicle_fig.set_constrained_layout(True)
+        # self.vesicle_fig.set_constrained_layout(True)
         if n_vesicles == 0:
             return
 
@@ -3399,6 +3435,7 @@ class ModularRICSGUI:
             ax1.set_ylabel("Radial (µm)")
             ax1.set_title(f"Vesicle {lbl} — frame 0\nr={radius_um:.1f}µm", fontsize=9)
             self.vesicle_fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+            # ax1.set_rasterized(True)   # ← fix for SVG blank panel
 
             # ── Panel 2: heatmap (time vs angle) ──
             ax2 = self.vesicle_fig.add_subplot(gs[1, vi])
@@ -3415,6 +3452,7 @@ class ModularRICSGUI:
                 ax2.set_ylabel("Frame")
                 ax2.set_title(f"Vesicle {lbl} — intensity heatmap", fontsize=9)
                 self.vesicle_fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+                # ax2.set_rasterized(True)   # ← fix for SVG blank panel
             else:
                 # single frame: show as a 1D intensity profile line plot
                 ax2.plot(x_um, profile[0], "r-", linewidth=1.5)
@@ -3440,7 +3478,7 @@ class ModularRICSGUI:
                 ax3.set_title(f"Vesicle {lbl} — total: {total[0]:.1f}", fontsize=9)
                 ax3.set_xlim(-0.5, 0.5)
 
-        # self.vesicle_fig.tight_layout()
+        self.vesicle_fig.tight_layout()
         self.vesicle_canvas.draw()
 
         # save SVG
