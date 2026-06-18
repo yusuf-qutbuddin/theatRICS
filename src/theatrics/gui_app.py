@@ -2020,6 +2020,8 @@ class ModularRICSGUI:
             "number of iterations": 20000,
             # in fcs_default_initial_params()
             "offset": 0.0,
+            "temperature_K": 303.15,        # 20 °C — kept in sync with experiment_T below
+            "viscosity_mPas": 1.002,        # mPa·s — water at 20 °C
         }
     def _parse_param_value(self, s: str):
         s = s.strip()
@@ -2075,9 +2077,19 @@ class ModularRICSGUI:
             "siFCSTwoComponents": ["G0_1", "G0_2", "tau characteristic decay short", "tau characteristic decay long"],
 
             # MEMFCS
-            "g3diffMEMFCS": ["tau_D limits", "number of diffusion components", "number of iterations"],
+            "g3diffMEMFCS": ["tau_D limits", "number of diffusion components", "number of iterations","viscosity_mPas",        # ← new
+                "temperature_K",         ],
         }
-
+    def _safe_float_from_str(self, value, name: str, fallback: float) -> float:
+        """Parse a raw value (str, int, or float) as float with fallback."""
+        try:
+            v = float(value)
+            if not np.isfinite(v):
+                raise ValueError
+            return v
+        except (ValueError, TypeError):
+            self.log_message(f"WARNING: invalid value for '{name}', using {fallback}")
+            return fallback
     def run_fcsfit(self):
         if self._is_worker_running("fcsfit_proc"):
             messagebox.showwarning("Warning", "FCS fitting is already running.")
@@ -2093,9 +2105,12 @@ class ModularRICSGUI:
 
         tau_min = self._safe_float(self.fcsfit_tau_min, "Tau min", 1e-6)
         tau_max = self._safe_float(self.fcsfit_tau_max, "Tau max", 1.0)
-
+        # experiment_T is in °C; MEMFCS needs Kelvin and viscosity in Pa·s
+        T_C = self._safe_float(self.fcsfit_expt_T, "Experiment T", 30.0)
 
         initial_params = dict(self.fcs_default_initial_params())
+        # update temperature_K in params so the editor shows the correct value
+        initial_params['temperature_K'] = T_C + 273.15
 
         # apply only currently visible editor values
         for key, var in self.fcs_param_vars.items():
@@ -2108,7 +2123,12 @@ class ModularRICSGUI:
             initial_params["F_B"] = initial_params["F_Blink"]
         if "F_B" in initial_params and "F_Blink" not in initial_params:
             initial_params["F_Blink"] = initial_params["F_B"]
-
+        # convert viscosity from mPa·s (GUI) → Pa·s (SI, needed by calculations)
+        eta_mPas = self._safe_float_from_str(
+            initial_params.get('viscosity_mPas', 1.002),
+            'viscosity_mPas', 1.002
+        )
+        initial_params['viscosity_Pa_s'] = eta_mPas * 1e-3
         model = self.fcsfit_model.get()
 
         kwargs = dict(
@@ -2158,96 +2178,204 @@ class ModularRICSGUI:
         self.fcsfit_proc.start()
         self._poll_fcsfit_queue()
     def update_fcs_fit_display(self, res: dict, write_summary: bool = True):
-        """
-        Plot into the embedded matplotlib canvas (like rics_fit) AND
-        export SVG/CSVs into Results/ next to the input file.
-
-        If write_summary=False, only per-file outputs are written, not the summary CSV.
-        """
         self.fcsfit_fig.clear()
         gs = gridspec.GridSpec(2, 2, figure=self.fcsfit_fig)
 
         fitting_model = res["fitting_model"]
-        base_path = res["base_path"]  # no ".csv"
+        base_path = res["base_path"]
 
-        tau = np.asarray(res["tau"], dtype=float)
-        G = np.asarray(res["G"], dtype=float)
-        sigma = np.asarray(res["sigma_G"], dtype=float)
-        pred = np.asarray(res["ccPrediction"], dtype=float)
-        wr = np.asarray(res["weighted_r"], dtype=float)
+        tau     = np.asarray(res["tau"],       dtype=float)
+        G       = np.asarray(res["G"],         dtype=float)
+        sigma   = np.asarray(res["sigma_G"],   dtype=float)
+        pred    = np.asarray(res["ccPrediction"], dtype=float)
+        wr      = np.asarray(res["weighted_r"],   dtype=float)
 
+        is_memfcs = (fitting_model == "g3diffMEMFCS")
+
+        # ── top-left: correlation curve ──
         ax00 = self.fcsfit_fig.add_subplot(gs[0, 0])
-        ax00.semilogx(tau, G, "r", label="G observed")
-        ax00.semilogx(tau, pred, "g", label="G fit")
-        ax00.fill_between(tau, G - sigma, G + sigma, color="b", alpha=0.2, label="±σ")
+        ax00.semilogx(tau, G,    "r",  label="G observed")
+        ax00.semilogx(tau, pred, "g",  label="G fit")
+        ax00.fill_between(tau, G - sigma, G + sigma,
+                          color="b", alpha=0.2, label="±σ")
         ax00.set_xlabel("τ (s)")
         ax00.set_ylabel("G(τ)")
-        ax00.legend()
+        ax00.set_title("Correlation curve")
+        ax00.legend(fontsize=8)
         ax00.grid(True, alpha=0.3)
 
+        # ── top-right: weighted residuals vs τ ──
         ax01 = self.fcsfit_fig.add_subplot(gs[0, 1])
         ax01.semilogx(tau, wr, "b")
         ax01.axhline(0, color="k", lw=1, alpha=0.5)
         ax01.set_xlabel("τ (s)")
-        ax01.set_ylabel("weighted residual")
+        ax01.set_ylabel("Weighted residual")
+        ax01.set_title("Weighted residuals")
         ax01.grid(True, alpha=0.3)
 
+        # ── bottom-left: MEMFCS → distribution panels  /  others → iMSD ──
         ax10 = self.fcsfit_fig.add_subplot(gs[1, 0])
-        reIMSD = None
-        if fitting_model not in ["siFCS", "siFCSTwoComponents", "g3diffMEMFCS"]:
-            aR = res.get("PSF_aspect_ratio", None)
-            N = res.get("N", None)
-            offset = res.get("offset", 0.0)
 
-            if aR is not None and N is not None:
-                reIMSD = calculate.iMSD_calc(tau, float(aR), float(N), pred, float(offset))
-                ax10.loglog(tau, reIMSD)
-                ax10.set_ylabel("iMSD")
+        if is_memfcs:
+            # pull the distribution arrays from the result dict
+            memfcs_D    = res.get("memfcs_D")
+            memfcs_amps = res.get("memfcs_amplitudes")
+            memfcs_R_h  = res.get("memfcs_R_h_nm")
+
+            if memfcs_D is not None and memfcs_amps is not None:
+                memfcs_D    = np.asarray(memfcs_D,    dtype=float)
+                memfcs_amps = np.asarray(memfcs_amps, dtype=float)
+
+                # D distribution on the primary axis
+                ax10.semilogx(memfcs_D, memfcs_amps,
+                              color="seagreen", linewidth=2, label="D distribution")
+
+                max_D = res.get("memfcs_max_freq_D")
+                if max_D is not None:
+                    ax10.axvline(float(max_D), color="tomato",
+                                 linestyle="--", linewidth=1.5,
+                                 label=f"peak D = {float(max_D):.3e} µm²/s")
+
+                ax10.set_xlabel("Diffusion coefficient D (µm²/s)")
+                ax10.set_ylabel("Amplitude")
+                ax10.set_title("MEMFCS — D distribution")
+                ax10.legend(fontsize=8)
+                ax10.grid(True, alpha=0.3)
+
+                # R_h distribution overlaid on a twin x-axis if available
+                if memfcs_R_h is not None:
+                    memfcs_R_h = np.asarray(memfcs_R_h, dtype=float)
+
+                    # use the bottom-right panel for R_h so both are visible
+                    # (we will replace the residual histogram with R_h for MEMFCS)
+                    pass   # handled below in ax11 block
             else:
-                ax10.loglog(tau, G, "r", label="G observed")
-                ax10.loglog(tau, pred, "g", label="G fit")
-                ax10.set_ylabel("G(τ)")
+                ax10.text(0.5, 0.5, "No MEMFCS distribution data",
+                          ha="center", va="center", transform=ax10.transAxes)
+                ax10.set_title("MEMFCS — D distribution")
+
         else:
-            ax10.loglog(tau, G, "r", label="G observed")
-            ax10.loglog(tau, pred, "g", label="G fit")
-            ax10.set_ylabel("G(τ)")
+            # existing iMSD logic unchanged
+            reIMSD = None
+            if fitting_model not in ["siFCS", "siFCSTwoComponents", "g3diffMEMFCS"]:
+                aR     = res.get("PSF_aspect_ratio")
+                N      = res.get("N")
+                offset = res.get("offset", 0.0)
 
-        ax10.set_xlabel("τ (s)")
-        ax10.grid(True, alpha=0.3)
+                if aR is not None and N is not None:
+                    from theatrics.fcsfit import calculations as calculate
+                    reIMSD = calculate.iMSD_calc(
+                        tau, float(aR), float(N), pred, float(offset)
+                    )
+                    ax10.loglog(tau, reIMSD)
+                    ax10.set_ylabel("iMSD")
+                    ax10.set_title("iMSD")
+                else:
+                    ax10.semilogx(tau, G,    "r", label="G observed")
+                    ax10.semilogx(tau, pred, "g", label="G fit")
+                    ax10.set_ylabel("G(τ)")
+                    ax10.set_title("Correlation (log-log)")
+                    ax10.legend(fontsize=8)
+            else:
+                ax10.semilogx(tau, G,    "r", label="G observed")
+                ax10.semilogx(tau, pred, "g", label="G fit")
+                ax10.set_ylabel("G(τ)")
+                ax10.set_title("Correlation")
+                ax10.legend(fontsize=8)
 
+            ax10.set_xlabel("τ (s)")
+            ax10.grid(True, alpha=0.3)
+
+        # ── bottom-right: MEMFCS → R_h distribution  /  others → residual histogram ──
         ax11 = self.fcsfit_fig.add_subplot(gs[1, 1])
-        finite = np.isfinite(wr)
-        ax11.hist(wr[finite], bins=40, density=True)
-        ax11.set_xlabel("weighted residual")
-        ax11.set_ylabel("density")
+
+        if is_memfcs:
+            memfcs_R_h  = res.get("memfcs_R_h_nm")
+            memfcs_amps = res.get("memfcs_amplitudes")
+
+            if memfcs_R_h is not None and memfcs_amps is not None:
+                memfcs_R_h  = np.asarray(memfcs_R_h,  dtype=float)
+                memfcs_amps = np.asarray(memfcs_amps, dtype=float)
+
+                ax11.semilogx(memfcs_R_h, memfcs_amps,
+                              color="mediumpurple", linewidth=2,
+                              label="R_h distribution")
+
+                max_R_h = res.get("memfcs_max_freq_R_h")
+                mean_R_h = res.get("memfcs_R_h_mean_nm")
+
+                if max_R_h is not None:
+                    ax11.axvline(float(max_R_h), color="tomato",
+                                 linestyle="--", linewidth=1.5,
+                                 label=f"peak  {float(max_R_h):.2f} nm")
+                if mean_R_h is not None:
+                    ax11.axvline(float(mean_R_h), color="orange",
+                                 linestyle=":", linewidth=1.5,
+                                 label=f"mean  {float(mean_R_h):.2f} nm")
+
+                ax11.set_xlabel("Hydrodynamic radius R_h (nm)")
+                ax11.set_ylabel("Amplitude")
+                ax11.set_title("MEMFCS — R_h distribution")
+                ax11.legend(fontsize=8)
+                ax11.grid(True, alpha=0.3)
+            else:
+                ax11.text(0.5, 0.5, "No R_h data available",
+                          ha="center", va="center", transform=ax11.transAxes)
+                ax11.set_title("MEMFCS — R_h distribution")
+
+        else:
+            # existing weighted residual histogram unchanged
+            finite = np.isfinite(wr)
+            ax11.hist(wr[finite], bins=40, density=True)
+            ax11.set_xlabel("Weighted residual")
+            ax11.set_ylabel("Density")
+            ax11.set_title("Residual distribution")
 
         self.fcsfit_fig.tight_layout()
         self.fcsfit_canvas.draw()
 
-        # per-file outputs next to each file
+        # ── per-file outputs (unchanged logic) ──
         edit_path = self.fcs_make_edit_path(base_path, fitting_model)
 
-        self.fcsfit_fig.savefig(edit_path + ".svg", dpi=300, bbox_inches="tight", facecolor="white")
+        self.fcsfit_fig.savefig(
+            edit_path + ".svg", dpi=300, bbox_inches="tight", facecolor="white"
+        )
 
-        cc_fits_df = pd.DataFrame({"tau": tau, "G": G, "sigma G": sigma, "cc Fit": pred})
+        cc_fits_df = pd.DataFrame({
+            "tau": tau, "G": G, "sigma G": sigma, "cc Fit": pred
+        })
         cc_fits_df.to_csv(edit_path + ".csv", header=True, index=False)
 
-        if reIMSD is not None:
-            iMSD_df = pd.DataFrame({"tau": tau, "iMSD": reIMSD})
-            iMSD_df.to_csv(edit_path + "_iMSD.csv", header=True, index=False)
+        # iMSD CSV for non-MEMFCS models that produced it
+        if not is_memfcs:
+            reIMSD_local = None
+            aR     = res.get("PSF_aspect_ratio")
+            N      = res.get("N")
+            offset = res.get("offset", 0.0)
+            if (fitting_model not in ["siFCS", "siFCSTwoComponents"]
+                    and aR is not None and N is not None):
+                try:
+                    from theatrics.fcsfit import calculations as calculate
+                    reIMSD_local = calculate.iMSD_calc(
+                        tau, float(aR), float(N), pred, float(offset)
+                    )
+                except Exception:
+                    pass
+            if reIMSD_local is not None:
+                iMSD_df = pd.DataFrame({"tau": tau, "iMSD": reIMSD_local})
+                iMSD_df.to_csv(edit_path + "_iMSD.csv", header=True, index=False)
 
         if write_summary:
-            summary_csv = os.path.join(os.path.dirname(edit_path), f"{fitting_model}_fit_summary.csv")
+            summary_csv = os.path.join(
+                os.path.dirname(edit_path),
+                f"{fitting_model}_fit_summary.csv"
+            )
             estimate = res.get("estimate_data", {})
             row = {}
             for k, v in estimate.items():
                 if v == [None]:
                     continue
-                if isinstance(v, list) and len(v) == 1:
-                    row[k] = v[0]
-                else:
-                    row[k] = v
-
+                row[k] = v[0] if (isinstance(v, list) and len(v) == 1) else v
             row["Filename"] = base_path
             df = pd.DataFrame([row])
 

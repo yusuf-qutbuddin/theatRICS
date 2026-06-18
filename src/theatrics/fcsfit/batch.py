@@ -137,17 +137,57 @@ def run_batch_folder(
             last_res = res
             n_ok += 1
 
-            # flatten estimate_data into one summary row
+            # ── per-file: save fit curve CSV + SVG for every file ──
+            base = _strip_csv(csv_path)
+            fitting_model = kwargs["fitting_model"]
+
+            tau = np.asarray(res["tau"], dtype=float)
+            G = np.asarray(res["G"], dtype=float)
+            sigma = np.asarray(res["sigma_G"], dtype=float)
+            pred = np.asarray(res["ccPrediction"], dtype=float)
+
+            per_file_results_dir = os.path.join(os.path.dirname(base), "Results")
+            os.makedirs(per_file_results_dir, exist_ok=True)
+            edit_base = os.path.join(per_file_results_dir,
+                                     os.path.basename(base) + "_" + fitting_model)
+
+            # fit curve CSV
+            pd.DataFrame({
+                "tau": tau, "G": G,
+                "sigma G": sigma, "cc Fit": pred,
+            }).to_csv(edit_base + ".csv", index=False)
+
+            # fit curve SVG
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.semilogx(tau, G, "r", label="G observed")
+            ax.semilogx(tau, pred, "g", label="G fit")
+            ax.fill_between(tau, G - sigma, G + sigma,
+                            color="b", alpha=0.2, label="±σ")
+            ax.set_xlabel("τ (s)")
+            ax.set_ylabel("G(τ)")
+            ax.set_title(os.path.basename(csv_path))
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(edit_base + ".svg",
+                        dpi=300, bbox_inches="tight", facecolor="white")
+            plt.close(fig)
+
+            # MEMFCS distribution is already saved by models_and_fit.main()
+            # but log the paths if present
+            if fitting_model == "g3diffMEMFCS":
+                dist_csv = edit_base.replace(
+                    "_" + fitting_model, ""
+                ) + "_MEMFCS_distribution.csv"
+                # (already written by _save_memfcs_distribution inside main())
+
+            # summary row
             estimate = res.get("estimate_data", {})
             row = {}
             for k, v in estimate.items():
                 if v == [None]:
                     continue
-                if isinstance(v, list) and len(v) == 1:
-                    row[k] = v[0]
-                else:
-                    row[k] = v
-
+                row[k] = v[0] if (isinstance(v, list) and len(v) == 1) else v
             row["Filename"] = res.get("base_path", csv_path)
             summary_rows.append(row)
 

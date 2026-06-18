@@ -1001,8 +1001,94 @@ def siFCSTwoComponents_fit(tau, G, sigma_G, count_rate, initial_params, goodness
 
     # Calculations from fitting parameters
     return calculate.calculate_from_fit(goodness_of_fit_criterion, count_rate, 0, 0,tau, G, sigma_G, ccPrediction,len(parameters), parameters, param_cov,given_params ,'siFCSTwoComponents')
+def _save_memfcs_distribution(base_path: str, return_dict: dict) -> dict:
+    """
+    Save MEMFCS diffusion time / D / hydrodynamic radius distributions
+    to a CSV and a 3-panel SVG.
+    """
+    tau_D       = return_dict['tau_D_distribution']
+    D_dist      = return_dict['D_distribution']
+    amps        = return_dict['Amplitudes']
+    R_h_nm      = return_dict['R_h_distribution_nm']
 
-def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion):
+    max_freq_D      = return_dict['max_freq_D']
+    max_freq_tau_D  = return_dict['max_freq_tau_D']
+    max_freq_R_h_nm = return_dict['max_freq_R_h_nm']
+    mean_tau_D      = return_dict['mean tau diffusion']
+    R_h_mean_nm     = return_dict['R_h_mean_nm']
+    T_K             = return_dict['temperature_K']
+    eta             = return_dict['viscosity_Pa_s']
+
+    # ── CSV: all three axes in one file ──
+    dist_csv = base_path + "_MEMFCS_distribution.csv"
+    pd.DataFrame({
+        'tau_D (s)':        tau_D,
+        'D (µm²/s)':        D_dist,
+        'R_h (nm)':         R_h_nm,
+        'Amplitude':        amps,
+    }).to_csv(dist_csv, index=False)
+
+    # ── SVG: 3-panel figure ──
+    dist_svg = base_path + "_MEMFCS_distribution.svg"
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+    # panel 1 — diffusion time
+    ax_tau = axes[0]
+    ax_tau.semilogx(tau_D, amps, color='steelblue', linewidth=2)
+    ax_tau.axvline(
+        max_freq_tau_D, color='tomato', linestyle='--', linewidth=1.5,
+        label=f'peak  {max_freq_tau_D:.3e} s'
+    )
+    ax_tau.axvline(
+        mean_tau_D, color='orange', linestyle=':', linewidth=1.5,
+        label=f'mean  {mean_tau_D:.3e} s'
+    )
+    ax_tau.set_xlabel('Diffusion time τ_D (s)')
+    ax_tau.set_ylabel('Amplitude')
+    ax_tau.set_title('Diffusion time distribution')
+    ax_tau.legend(fontsize=8)
+    ax_tau.grid(True, alpha=0.3)
+
+    # panel 2 — diffusion coefficient
+    ax_D = axes[1]
+    ax_D.semilogx(D_dist, amps, color='seagreen', linewidth=2)
+    ax_D.axvline(
+        max_freq_D, color='tomato', linestyle='--', linewidth=1.5,
+        label=f'peak  {max_freq_D:.3e} µm²/s'
+    )
+    ax_D.set_xlabel('Diffusion coefficient D (µm²/s)')
+    ax_D.set_ylabel('Amplitude')
+    ax_D.set_title('Diffusion coefficient distribution')
+    ax_D.legend(fontsize=8)
+    ax_D.grid(True, alpha=0.3)
+
+    # panel 3 — hydrodynamic radius
+    ax_rh = axes[2]
+    ax_rh.semilogx(R_h_nm, amps, color='mediumpurple', linewidth=2)
+    ax_rh.axvline(
+        max_freq_R_h_nm, color='tomato', linestyle='--', linewidth=1.5,
+        label=f'peak  {max_freq_R_h_nm:.2f} nm'
+    )
+    ax_rh.axvline(
+        R_h_mean_nm, color='orange', linestyle=':', linewidth=1.5,
+        label=f'mean  {R_h_mean_nm:.2f} nm'
+    )
+    ax_rh.set_xlabel('Hydrodynamic radius R_h (nm)')
+    ax_rh.set_ylabel('Amplitude')
+    ax_rh.set_title(
+        f'Hydrodynamic radius distribution\n'
+        f'T = {T_K - 273.15:.1f} °C, η = {eta * 1e3:.3f} mPa·s'
+    )
+    ax_rh.legend(fontsize=8)
+    ax_rh.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(dist_svg, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+    return {'dist_csv': dist_csv, 'dist_svg': dist_svg}
+def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion,temperature_K: float = 303.15,
+                     viscosity_Pa_s: float = 1e-3):
     # object definition and initialization/construction
 
     fit_object = g3diffMEMFCS()
@@ -1099,7 +1185,19 @@ def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, P
     # plt.plot(r_chi_squared, 'r')
     # plt.plot(S, 'g')
     # ax[1].semilogx(tau_D, a_fit, 'r')
-    return calculate.calculate_from_fit(goodness_of_fit_criterion, count_rate, corrected_D, BG,tau, G, sigma_G, G_fit_normalized,0, parameters, param_cov,given_params ,'g3diffMEMFCS')
+    # ── pass physical parameters into given_params ──
+    given_params = {
+        'PSF_aspect_ratio': PSF_aspect_ratio,
+        'PSF_radius': PSF_radius,
+        'temperature_K': temperature_K,
+        'viscosity_Pa_s': viscosity_Pa_s,
+    }
+    return calculate.calculate_from_fit(
+        goodness_of_fit_criterion, count_rate, corrected_D, BG,
+        tau, G, sigma_G, G_fit_normalized,
+        0, parameters, param_cov, given_params, 'g3diffMEMFCS'
+    )
+    # return calculate.calculate_from_fit(goodness_of_fit_criterion, count_rate, corrected_D, BG,tau, G, sigma_G, G_fit_normalized,0, parameters, param_cov,given_params ,'g3diffMEMFCS')
 
     # display figures for 2 seconds
     # fig.show()
@@ -1212,6 +1310,10 @@ def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radiu
             initial_params['number of iterations'] = 10000
         if 'Radius' not in initial_params.keys():
             initial_params['Radius of the particle'] = 0.1
+        if 'temperature_K' not in initial_params.keys():
+            initial_params['temperature_K'] = 303.15        # 20 °C
+        if 'viscosity_Pa_s' not in initial_params.keys():
+            initial_params['viscosity_Pa_s'] = 1e-3         # water at 20 °C
 
     else:
         initial_params['tau diffusion'] = 1E-3
@@ -1493,12 +1595,40 @@ def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radiu
                          'Chi squared': [return_dict['Chi squared']], 'Tau characteristic decay short': [return_dict['Tau characteristic decay short']],
                          'Tau characteristic decay long': [return_dict['Tau characteristic decay long']],'BIC': [return_dict['BIC']], 'p_ttest': [return_dict['p_ttest']],
                          'p_wilcoxon': [return_dict['p_wilcoxon']], 'p_runstest': [return_dict['p_runstest']], 'p_runstest_residuals': [return_dict['p_runstest_residuals']]}  # dictionary for DataFrames
-    
     elif fitting_model == 'g3diffMEMFCS':
-        return_dict = g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion)
-        # saving the fitted data to csv file
-        estimate_data = {'Count Rate': [return_dict['Count Rate']],'Chi squared': [return_dict['Chi squared']],'Mean Tau D': [return_dict['mean tau diffusion']],'D': [return_dict['D']],'BIC': [return_dict['BIC']], 'p_ttest': [return_dict['p_ttest']],
-                          'p_wilcoxon': [return_dict['p_wilcoxon']], 'p_runstest': [return_dict['p_runstest']], 'p_runstest_residuals': [return_dict['p_runstest_residuals']]}  # dictionary for DataFrames
+        return_dict = g3diffMEMFCS_fit(
+            tau, G, sigma_G, count_rate, corrected_D, BG,
+            PSF_radius, PSF_aspect_ratio, initial_params,
+            goodness_of_fit_criterion,
+            temperature_K=initial_params.get('temperature_K', 303.15),
+            viscosity_Pa_s=initial_params.get('viscosity_Pa_s', 1e-3),
+        )
+        estimate_data = {
+            'Count Rate': [return_dict['Count Rate']],
+            'Chi squared': [return_dict['Chi squared']],
+            'Mean Tau D': [return_dict['mean tau diffusion']],
+            'D': [return_dict['D']],
+            'BIC': [return_dict['BIC']],
+            'p_ttest': [return_dict['p_ttest']],
+            'p_wilcoxon': [return_dict['p_wilcoxon']],
+            'p_runstest': [return_dict['p_runstest']],
+            'p_runstest_residuals': [return_dict['p_runstest_residuals']],
+        }
+
+        # Save distribution CSV + SVG next to the input file
+        # `path` here is already the base path without ".csv"
+        results_dir = os.path.join(os.path.dirname(path), "Results")
+        os.makedirs(results_dir, exist_ok=True)
+        dist_base = os.path.join(results_dir, os.path.basename(path))
+        mem_paths = _save_memfcs_distribution(dist_base, return_dict)
+        warnings_list.append(
+            f"MEMFCS distribution saved: {mem_paths['dist_csv']}"
+        )
+    # elif fitting_model == 'g3diffMEMFCS':
+    #     return_dict = g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion)
+    #     # saving the fitted data to csv file
+    #     estimate_data = {'Count Rate': [return_dict['Count Rate']],'Chi squared': [return_dict['Chi squared']],'Mean Tau D': [return_dict['mean tau diffusion']],'D': [return_dict['D']],'BIC': [return_dict['BIC']], 'p_ttest': [return_dict['p_ttest']],
+    #                       'p_wilcoxon': [return_dict['p_wilcoxon']], 'p_runstest': [return_dict['p_runstest']], 'p_runstest_residuals': [return_dict['p_runstest_residuals']]}  # dictionary for DataFrames
     
     else:
         print('Fitting model does not match with available options')
@@ -1520,16 +1650,24 @@ def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radiu
         "ccPrediction": return_dict.get("ccPrediction"),
         "weighted_r": return_dict.get("weighted_r"),
 
-        # used for iMSD calculation in GUI (if applicable)
         "N": return_dict.get("N"),
         "PSF_aspect_ratio": return_dict.get("PSF aspect ratio"),
         "offset": return_dict.get("offset", 0.0),
 
-        # keep both for flexibility in GUI exports
-        "estimate_data": estimate_data,   # dict of lists
-        "return_dict": return_dict,       # full fit output dict
+        "estimate_data": estimate_data,
+        "return_dict": return_dict,
+        "warnings": warnings_list,
 
-         "warnings": warnings_list, # warnings list
+        # MEMFCS-only — None for all other models
+        "memfcs_tau_D": return_dict.get("tau_D_distribution"),
+        "memfcs_D": return_dict.get("D_distribution"),
+        "memfcs_amplitudes": return_dict.get("Amplitudes"),
+        "memfcs_max_freq_D": return_dict.get("max_freq_D"),
+        "memfcs_max_freq_tau_D": return_dict.get("max_freq_tau_D"),
+        "memfcs_mean_tau_D": return_dict.get("mean tau diffusion"),
+        "memfcs_R_h_nm":        return_dict.get("R_h_distribution_nm"),      # ← new
+        "memfcs_R_h_mean_nm":   return_dict.get("R_h_mean_nm"),              # ← new
+        "memfcs_max_freq_R_h":  return_dict.get("max_freq_R_h_nm"),          # ← new
     }
     return out
    

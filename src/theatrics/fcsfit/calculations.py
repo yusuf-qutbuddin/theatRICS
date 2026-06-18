@@ -522,6 +522,40 @@ def calculate_from_fit(goodness_of_fit_criterion, count_rate, corrected_D, BG,ta
                 'ccPrediction': ccPrediction, 'Count Rate': count_rate, 'p_ttest':p_ttest, 'p_wilcoxon':p_wilcoxon,'p_runstest':p_runstest,
                 'p_runstest_residuals':p_runstest_residuals,'BIC': BIC}
     
+    # elif fitting_model == 'g3diffMEMFCS':
+    #     PSF_radius = given_params['PSF_radius']
+    #     PSF_aspect_ratio = given_params['PSF_aspect_ratio']
+    #     tau_D = parameters['tau D']
+    #     D = (PSF_radius ** 2) / (4 * tau_D)
+    #     a_fit_normalized = parameters['Amplitudes']
+    #     max_index = np.argmax(a_fit_normalized)
+    #     max_freq_tau_D = tau_D[max_index]
+    #     max_freq_D = D[max_index]
+    #     mean_tau_D = np.sum(tau_D*a_fit_normalized)/np.sum(a_fit_normalized)
+    #     G_fit_normalized = G
+        
+    #     # tau_D_plot = plt.figure()
+    #     # ax = tau_D_plot.add_subplot(1,1,1)
+    #     # ax.set_xlabel("Diffusion time")
+    #     # ax.set_ylabel("Amplitude")
+    #     # ax.semilogx(tau_D, a_fit_normalized)
+    #     # ax.axvline(x=max_freq_tau_D)
+
+    #     # ax.set_title("I like $\pi$")
+       
+    #     D_fitted = (PSF_radius ** 2) / (4 * mean_tau_D)
+    #     D_plot = plt.figure()
+    #     ax = D_plot.add_subplot(1,1,1)
+    #     ax.set_xlabel("Diffusion Coefficient")
+    #     ax.set_ylabel("Amplitude")
+    #     ax.semilogx(D, a_fit_normalized)
+    #     ax.axvline(x=max_freq_D)
+        
+    #     return {'PSF radius': PSF_radius, 'PSF aspect ratio': PSF_aspect_ratio,'Chi squared': r_chi_squared, 'r':r,'weighted_r':weighted_r,
+    #             'ccPrediction': ccPrediction, 'Count Rate': count_rate, 'p_ttest':p_ttest, 'p_wilcoxon':p_wilcoxon,'p_runstest':p_runstest,
+    #             'p_runstest_residuals':p_runstest_residuals,'BIC': BIC, 'D Plot': D_plot, 'tau D': tau_D, 'Amplitudes': a_fit_normalized, 'mean tau diffusion': mean_tau_D, 'D': D_fitted}
+        
+        
     elif fitting_model == 'g3diffMEMFCS':
         PSF_radius = given_params['PSF_radius']
         PSF_aspect_ratio = given_params['PSF_aspect_ratio']
@@ -531,32 +565,56 @@ def calculate_from_fit(goodness_of_fit_criterion, count_rate, corrected_D, BG,ta
         max_index = np.argmax(a_fit_normalized)
         max_freq_tau_D = tau_D[max_index]
         max_freq_D = D[max_index]
-        mean_tau_D = np.sum(tau_D*a_fit_normalized)/np.sum(a_fit_normalized)
-        G_fit_normalized = G
-        
-        # tau_D_plot = plt.figure()
-        # ax = tau_D_plot.add_subplot(1,1,1)
-        # ax.set_xlabel("Diffusion time")
-        # ax.set_ylabel("Amplitude")
-        # ax.semilogx(tau_D, a_fit_normalized)
-        # ax.axvline(x=max_freq_tau_D)
-
-        # ax.set_title("I like $\pi$")
-       
+        mean_tau_D = np.sum(tau_D * a_fit_normalized) / np.sum(a_fit_normalized)
         D_fitted = (PSF_radius ** 2) / (4 * mean_tau_D)
-        D_plot = plt.figure()
-        ax = D_plot.add_subplot(1,1,1)
-        ax.set_xlabel("Diffusion Coefficient")
-        ax.set_ylabel("Amplitude")
-        ax.semilogx(D, a_fit_normalized)
-        ax.axvline(x=max_freq_D)
-        
-        return {'PSF radius': PSF_radius, 'PSF aspect ratio': PSF_aspect_ratio,'Chi squared': r_chi_squared, 'r':r,'weighted_r':weighted_r,
-                'ccPrediction': ccPrediction, 'Count Rate': count_rate, 'p_ttest':p_ttest, 'p_wilcoxon':p_wilcoxon,'p_runstest':p_runstest,
-                'p_runstest_residuals':p_runstest_residuals,'BIC': BIC, 'D Plot': D_plot, 'tau D': tau_D, 'Amplitudes': a_fit_normalized, 'mean tau diffusion': mean_tau_D, 'D': D_fitted}
-        
-        
-    
+        # ── Stokes-Einstein: R_h = k_B * T / (6 * pi * eta * D) ──
+        # D must be in m²/s; PSF_radius is in µm so D is in µm²/s
+        # eta is in Pa·s (mPa·s / 1000), T is in K
+        k_B = 1.380649e-23          # J/K
+        T_K = given_params.get('temperature_K', 303.15)        # Kelvin
+        eta = given_params.get('viscosity_Pa_s', 1e-3)         # Pa·s
+
+        D_m2s = D * 1e-12           # µm²/s → m²/s
+        R_h = k_B * T_K / (6.0 * np.pi * eta * D_m2s)         # metres
+        R_h_nm = R_h * 1e9          # → nm
+
+        D_mean_m2s = D_fitted * 1e-12
+        R_h_mean_nm = (k_B * T_K / (6.0 * np.pi * eta * D_mean_m2s)) * 1e9
+
+        max_freq_R_h_nm = (k_B * T_K / (
+            6.0 * np.pi * eta * (max_freq_D * 1e-12)
+        )) * 1e9
+        # Return raw arrays only — no plt.figure() here.
+        # The caller (models_and_fit.main) is responsible for saving the
+        # distribution CSV and SVG.
+        return {
+            'PSF radius': PSF_radius,
+            'PSF aspect ratio': PSF_aspect_ratio,
+            'Chi squared': r_chi_squared,
+            'r': r,
+            'weighted_r': weighted_r,
+            'ccPrediction': ccPrediction,
+            'Count Rate': count_rate,
+            'p_ttest': p_ttest,
+            'p_wilcoxon': p_wilcoxon,
+            'p_runstest': p_runstest,
+            'p_runstest_residuals': p_runstest_residuals,
+            'BIC': BIC,
+            # distribution arrays — used downstream for CSV + SVG
+            'tau_D_distribution': tau_D,
+            'D_distribution': D,
+            'Amplitudes': a_fit_normalized,
+            'max_freq_tau_D': max_freq_tau_D,
+            'max_freq_D': max_freq_D,
+            'mean tau diffusion': mean_tau_D,
+            'D': D_fitted,
+            # hydrodynamic radius arrays + scalars
+            'R_h_distribution_nm': R_h_nm,
+            'R_h_mean_nm': R_h_mean_nm,
+            'max_freq_R_h_nm': max_freq_R_h_nm,
+            'temperature_K': T_K,
+            'viscosity_Pa_s': eta,
+        }
 
         
     
