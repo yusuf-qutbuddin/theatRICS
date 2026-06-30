@@ -18,6 +18,7 @@ src/theatrics/afm/range.py
 src/theatrics/fcsfit/__init__.py
 src/theatrics/fcsfit/batch.py
 src/theatrics/fcsfit/calculations.py
+src/theatrics/fcsfit/memfcs.py
 src/theatrics/fcsfit/models_and_fit.py
 src/theatrics/frap/__init__.py
 src/theatrics/frap/analysis.py
