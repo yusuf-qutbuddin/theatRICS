@@ -1001,202 +1001,651 @@ def siFCSTwoComponents_fit(tau, G, sigma_G, count_rate, initial_params, goodness
 
     # Calculations from fitting parameters
     return calculate.calculate_from_fit(goodness_of_fit_criterion, count_rate, 0, 0,tau, G, sigma_G, ccPrediction,len(parameters), parameters, param_cov,given_params ,'siFCSTwoComponents')
-def _save_memfcs_distribution(base_path: str, return_dict: dict) -> dict:
+def _save_memfcs_distribution(base_path: str,
+                               return_dict: dict) -> dict:
     """
-    Save MEMFCS diffusion time / D / hydrodynamic radius distributions
-    to a CSV and a 3-panel SVG.
+    Save the combined Shannon + Jaynes diagnostic figure and CSVs.
+    The figure matches the layout from the debugging script.
     """
-    tau_D       = return_dict['tau_D_distribution']
-    D_dist      = return_dict['D_distribution']
-    amps        = return_dict['Amplitudes']
-    R_h_nm      = return_dict['R_h_distribution_nm']
+    tau       = return_dict.get("tau_D_distribution")
+    alpha_sh  = return_dict.get("alpha_distribution",
+                                return_dict.get("Amplitudes"))
+    alpha_jy  = return_dict.get("alpha_distribution_jy")
+    D_sh      = return_dict.get("D_distribution")
+    D_jy      = return_dict.get("D_distribution_jy")
+    R_h_sh    = return_dict.get("R_h_distribution_nm")
+    R_h_jy    = return_dict.get("R_h_distribution_nm_jy")
+    G_fit_sh  = return_dict.get("ccPrediction")
+    G_fit_jy  = return_dict.get("G_fit_jy")
+    G_pred_sc = return_dict.get("G_pred_sc")
+    prior_m   = return_dict.get("prior_m")
+    D_dist_m  = D_sh   # use Shannon grid for prior axis
 
-    max_freq_D      = return_dict['max_freq_D']
-    max_freq_tau_D  = return_dict['max_freq_tau_D']
-    max_freq_R_h_nm = return_dict['max_freq_R_h_nm']
-    mean_tau_D      = return_dict['mean tau diffusion']
-    R_h_mean_nm     = return_dict['R_h_mean_nm']
-    T_K             = return_dict['temperature_K']
-    eta             = return_dict['viscosity_Pa_s']
+    T_K    = return_dict.get("temperature_K",      293.15)
+    eta    = return_dict.get("viscosity_Pa_s",      1e-3)
+    width  = return_dict.get("prior_width_decades", 0.5)
+    chi2_sc = return_dict.get("chi2_sc",            np.nan)
+    tau_D_fit_sc = return_dict.get("tau_D_fit_sc",  np.nan)
+    PSF_radius = return_dict.get("PSF radius",      0.25)
+    D_fit_sc = (PSF_radius**2 / (4.0 * tau_D_fit_sc)
+                if not np.isnan(tau_D_fit_sc) else np.nan)
 
-    # ── CSV: all three axes in one file ──
-    dist_csv = base_path + "_MEMFCS_distribution.csv"
+    pk_D_sh  = return_dict.get("max_freq_D")
+    pk_D_jy  = return_dict.get("max_freq_D_jy")
+    mn_D_sh  = return_dict.get("D")
+    mn_D_jy  = return_dict.get("mean_D_jy")
+    pk_Rh_sh = return_dict.get("max_freq_R_h_nm")
+    pk_Rh_jy = return_dict.get("max_freq_R_h_nm_jy")
+    mn_Rh_sh = return_dict.get("R_h_mean_nm")
+    mn_Rh_jy = return_dict.get("R_h_mean_nm_jy")
+    chi2_sh  = return_dict.get("Chi squared",  np.nan)
+    chi2_jy  = return_dict.get("chi2_jy",      np.nan)
+
+    # ── save CSVs ──────────────────────────────────────────────
+    dist_csv_sh = base_path + "_MEMFCS_shannon_distribution.csv"
+    dist_csv_jy = base_path + "_MEMFCS_jaynes_distribution.csv"
+
     pd.DataFrame({
-        'tau_D (s)':        tau_D,
-        'D (µm²/s)':        D_dist,
-        'R_h (nm)':         R_h_nm,
-        'Amplitude':        amps,
-    }).to_csv(dist_csv, index=False)
+        "tau_D (s)":  tau,
+        "D (µm²/s)":  D_sh,
+        "R_h (nm)":   R_h_sh,
+        "Amplitude":  alpha_sh,
+    }).to_csv(dist_csv_sh, index=False)
 
-    # ── SVG: 3-panel figure ──
-    dist_svg = base_path + "_MEMFCS_distribution.svg"
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    if alpha_jy is not None:
+        pd.DataFrame({
+            "tau_D (s)":  tau,
+            "D (µm²/s)":  D_jy,
+            "R_h (nm)":   R_h_jy,
+            "Amplitude":  alpha_jy,
+        }).to_csv(dist_csv_jy, index=False)
 
-    # panel 1 — diffusion time
-    ax_tau = axes[0]
-    ax_tau.semilogx(tau_D, amps, color='steelblue', linewidth=2)
-    ax_tau.axvline(
-        max_freq_tau_D, color='tomato', linestyle='--', linewidth=1.5,
-        label=f'peak  {max_freq_tau_D:.3e} s'
+    # ── combined figure ────────────────────────────────────────
+    dist_svg = base_path + "_MEMFCS_combined.svg"
+    fig, axes = plt.subplots(3, 4, figsize=(20, 13))
+    fig.suptitle(
+        f"MEMFCS — Shannon (flat prior) vs Shannon-Jaynes (3D fit prior)\n"
+        f"Single-comp D={D_fit_sc:.1f} µm²/s  "
+        f"chi2_sc={chi2_sc:.2f}  "
+        f"T={T_K-273.15:.1f}°C  η={eta*1e3:.3f} mPa·s",
+        fontsize=11
     )
-    ax_tau.axvline(
-        mean_tau_D, color='orange', linestyle=':', linewidth=1.5,
-        label=f'mean  {mean_tau_D:.3e} s'
-    )
-    ax_tau.set_xlabel('Diffusion time τ_D (s)')
-    ax_tau.set_ylabel('Amplitude')
-    ax_tau.set_title('Diffusion time distribution')
-    ax_tau.legend(fontsize=8)
-    ax_tau.grid(True, alpha=0.3)
 
-    # panel 2 — diffusion coefficient
-    ax_D = axes[1]
-    ax_D.semilogx(D_dist, amps, color='seagreen', linewidth=2)
-    ax_D.axvline(
-        max_freq_D, color='tomato', linestyle='--', linewidth=1.5,
-        label=f'peak  {max_freq_D:.3e} µm²/s'
-    )
-    ax_D.set_xlabel('Diffusion coefficient D (µm²/s)')
-    ax_D.set_ylabel('Amplitude')
-    ax_D.set_title('Diffusion coefficient distribution')
-    ax_D.legend(fontsize=8)
-    ax_D.grid(True, alpha=0.3)
+    tau_data = return_dict.get("tau_used")   # may not be stored
+    G_data   = return_dict.get("G_used")
+    sigma_G  = return_dict.get("sigma_used")
 
-    # panel 3 — hydrodynamic radius
-    ax_rh = axes[2]
-    ax_rh.semilogx(R_h_nm, amps, color='mediumpurple', linewidth=2)
-    ax_rh.axvline(
-        max_freq_R_h_nm, color='tomato', linestyle='--', linewidth=1.5,
-        label=f'peak  {max_freq_R_h_nm:.2f} nm'
-    )
-    ax_rh.axvline(
-        R_h_mean_nm, color='orange', linestyle=':', linewidth=1.5,
-        label=f'mean  {R_h_mean_nm:.2f} nm'
-    )
-    ax_rh.set_xlabel('Hydrodynamic radius R_h (nm)')
-    ax_rh.set_ylabel('Amplitude')
-    ax_rh.set_title(
-        f'Hydrodynamic radius distribution\n'
-        f'T = {T_K - 273.15:.1f} °C, η = {eta * 1e3:.3f} mPa·s'
-    )
-    ax_rh.legend(fontsize=8)
-    ax_rh.grid(True, alpha=0.3)
+    # ── row 0: single-comp fit, correlation curves, residuals, prior
+    ax = axes[0, 0]
+    if G_data is not None:
+        ax.semilogx(tau_data, G_data, 'r', lw=1.5, label='G observed')
+    if G_pred_sc is not None and tau_data is not None:
+        ax.semilogx(tau_data, G_pred_sc, 'k--', lw=2,
+                    label=f'1-comp D={D_fit_sc:.1f} µm²/s')
+    if G_data is not None and sigma_G is not None:
+        ax.fill_between(tau_data, G_data-sigma_G, G_data+sigma_G,
+                        alpha=0.15, color='red')
+    ax.set_xlabel('τ (s)'); ax.set_ylabel('G(τ)')
+    ax.set_title(f'Single-component fit\nchi2={chi2_sc:.3f}')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    ax = axes[0, 1]
+    if G_data is not None:
+        ax.semilogx(tau_data, G_data, 'r', lw=1.5, label='G observed')
+    if G_fit_sh is not None and tau_data is not None:
+        ax.semilogx(tau_data, G_fit_sh, 'g--', lw=2,
+                    label=f'Shannon chi2={chi2_sh:.3f}')
+    if G_fit_jy is not None and tau_data is not None:
+        ax.semilogx(tau_data, G_fit_jy, 'b--', lw=2,
+                    label=f'Jaynes chi2={chi2_jy:.3f}')
+    if G_data is not None and sigma_G is not None:
+        ax.fill_between(tau_data, G_data-sigma_G, G_data+sigma_G,
+                        alpha=0.1, color='red')
+    ax.set_xlabel('τ (s)'); ax.set_ylabel('G(τ)')
+    ax.set_title('Correlation curves')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    wr_sh = return_dict.get("weighted_r")
+    wr_jy = return_dict.get("weighted_r_jy")
+    ax = axes[0, 2]
+    if wr_sh is not None and tau_data is not None:
+        ax.semilogx(tau_data, wr_sh, 'g', lw=1, label='Shannon')
+    if wr_jy is not None and tau_data is not None:
+        ax.semilogx(tau_data, wr_jy, 'b', lw=1, label='Jaynes', alpha=0.7)
+    ax.axhline( 0, color='k', lw=0.8)
+    ax.axhline( 3, color='r', lw=0.8, ls='--', label='±3σ')
+    ax.axhline(-3, color='r', lw=0.8, ls='--')
+    ax.set_xlabel('τ (s)'); ax.set_title('Weighted residuals')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    ax = axes[0, 3]
+    if prior_m is not None and D_dist_m is not None:
+        ax.semilogx(D_dist_m, prior_m / prior_m.max(),
+                    'orange', lw=2,
+                    label=f'Prior (width={width}d)')
+        ax.axvline(D_fit_sc, color='orange', ls='--', lw=1.5,
+                   label=f'1-comp D={D_fit_sc:.1f} µm²/s')
+    ax.set_xlabel('D (µm²/s)'); ax.set_ylabel('Normalised prior')
+    ax.set_title('Jaynes prior (invariant measure)')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # ── row 1: D distributions + chi2 + entropy ───────────────
+    ax = axes[1, 0]
+    if D_sh is not None and alpha_sh is not None:
+        ax.semilogx(D_sh, alpha_sh, 'g', lw=2)
+    if pk_D_sh is not None:
+        ax.axvline(pk_D_sh, color='r', ls='--',
+                   label=f'peak={pk_D_sh:.1f} µm²/s')
+    if mn_D_sh is not None:
+        ax.axvline(mn_D_sh, color='orange', ls=':',
+                   label=f'mean={mn_D_sh:.1f} µm²/s')
+    if D_fit_sc and not np.isnan(D_fit_sc):
+        ax.axvline(D_fit_sc, color='k', ls=':', lw=1.5,
+                   label=f'1-comp={D_fit_sc:.1f} µm²/s')
+    ax.set_xlabel('D (µm²/s)'); ax.set_ylabel('α')
+    ax.set_title('Shannon — D distribution')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    ax = axes[1, 1]
+    if D_jy is not None and alpha_jy is not None:
+        ax.semilogx(D_jy, alpha_jy, 'b', lw=2)
+    if pk_D_jy is not None:
+        ax.axvline(pk_D_jy, color='r', ls='--',
+                   label=f'peak={pk_D_jy:.1f} µm²/s')
+    if mn_D_jy is not None:
+        ax.axvline(mn_D_jy, color='orange', ls=':',
+                   label=f'mean={mn_D_jy:.1f} µm²/s')
+    if D_fit_sc and not np.isnan(D_fit_sc):
+        ax.axvline(D_fit_sc, color='k', ls=':', lw=1.5,
+                   label=f'1-comp={D_fit_sc:.1f} µm²/s')
+    ax.set_xlabel('D (µm²/s)'); ax.set_ylabel('α')
+    ax.set_title('Shannon-Jaynes — D distribution')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    ch_sh = return_dict.get("chi2_history", [])
+    ch_jy = return_dict.get("chi2_history_jy", [])
+    ax = axes[1, 2]
+    if ch_sh:
+        ax.semilogy(ch_sh, 'g', lw=1, label='Shannon', alpha=0.8)
+    if ch_jy:
+        ax.semilogy(ch_jy, 'b', lw=1, label='Jaynes',  alpha=0.8)
+    ax.axhline(1.0, color='r', ls='--', label='target=1')
+    ax.set_xlabel('Iteration'); ax.set_ylabel('chi2')
+    ax.set_title('chi2 convergence')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    s_sh = return_dict.get("S_history", [])
+    s_jy = return_dict.get("S_history_jy", [])
+    ax = axes[1, 3]
+    if s_sh:
+        ax.plot(s_sh, 'g', lw=1, label='S_Shannon', alpha=0.8)
+    if s_jy:
+        ax.plot(s_jy, 'b', lw=1, label='S_Jaynes',  alpha=0.8)
+    n_comp_val = len(alpha_sh) if alpha_sh is not None else 200
+    ax.axhline(np.log(n_comp_val), color='g', ls='--', lw=0.8,
+               label=f'Shannon max={np.log(n_comp_val):.3f}')
+    ax.axhline(0, color='b', ls='--', lw=0.8,
+               label='Jaynes max=0 (p=m)')
+    ax.set_xlabel('Iteration'); ax.set_ylabel('S')
+    ax.set_title('Entropy histories')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # ── row 2: R_h distributions + residual histograms ────────
+    ax = axes[2, 0]
+    if R_h_sh is not None and alpha_sh is not None:
+        ax.semilogx(R_h_sh, alpha_sh, 'g', lw=2)
+    if pk_Rh_sh is not None:
+        ax.axvline(pk_Rh_sh, color='r', ls='--',
+                   label=f'peak={pk_Rh_sh:.2f} nm')
+    if mn_Rh_sh is not None:
+        ax.axvline(mn_Rh_sh, color='orange', ls=':',
+                   label=f'mean={mn_Rh_sh:.2f} nm')
+    ax.set_xlabel('R_h (nm)'); ax.set_ylabel('α')
+    ax.set_title(f'Shannon — R_h distribution\n'
+                 f'T={T_K-273.15:.1f}°C  η={eta*1e3:.3f} mPa·s')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    ax = axes[2, 1]
+    if R_h_jy is not None and alpha_jy is not None:
+        ax.semilogx(R_h_jy, alpha_jy, 'b', lw=2)
+    if pk_Rh_jy is not None:
+        ax.axvline(pk_Rh_jy, color='r', ls='--',
+                   label=f'peak={pk_Rh_jy:.2f} nm')
+    if mn_Rh_jy is not None:
+        ax.axvline(mn_Rh_jy, color='orange', ls=':',
+                   label=f'mean={mn_Rh_jy:.2f} nm')
+    ax.set_xlabel('R_h (nm)'); ax.set_ylabel('α')
+    ax.set_title(f'Shannon-Jaynes — R_h distribution\n'
+                 f'T={T_K-273.15:.1f}°C  η={eta*1e3:.3f} mPa·s')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    xs = np.linspace(-5, 5, 200)
+    gauss = np.exp(-0.5*xs**2) / np.sqrt(2*np.pi)
+
+    ax = axes[2, 2]
+    if wr_sh is not None:
+        finite = np.isfinite(wr_sh)
+        ax.hist(wr_sh[finite], bins=40, density=True,
+                color='green', alpha=0.6, label='Shannon')
+    ax.plot(xs, gauss, 'r--', lw=1.5, label='N(0,1)')
+    ax.set_xlim(-6, 6)
+    ax.set_xlabel('Weighted residual'); ax.set_ylabel('Density')
+    ax.set_title('Shannon residual distribution')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    ax = axes[2, 3]
+    if wr_jy is not None:
+        finite = np.isfinite(wr_jy)
+        ax.hist(wr_jy[finite], bins=40, density=True,
+                color='blue', alpha=0.6, label='Jaynes')
+    ax.plot(xs, gauss, 'r--', lw=1.5, label='N(0,1)')
+    ax.set_xlim(-6, 6)
+    ax.set_xlabel('Weighted residual'); ax.set_ylabel('Density')
+    ax.set_title('Shannon-Jaynes residual distribution')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     fig.savefig(dist_svg, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
-    return {'dist_csv': dist_csv, 'dist_svg': dist_svg}
-def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion,temperature_K: float = 303.15,
-                     viscosity_Pa_s: float = 1e-3):
-    # object definition and initialization/construction
-
-    fit_object = g3diffMEMFCS()
-    fit_object.count_rate = count_rate
-    fit_object.BG = BG
-    fit_object.PSFaspectratio = PSF_aspect_ratio
-    
-    # initital parameter definitions
-    n_tau_D = initial_params['number of diffusion components']
-    tau_D_lims = initial_params['tau_D limits']  
-    n_iterations = initial_params['number of iterations']
-    
-    # initialization with initial diffusion constant having a flat distribituion
-    n_tau = len(tau)
-    # n_tau_D = 200
-    
-    tau_D = np.logspace(tau_D_lims[0],tau_D_lims[1],n_tau_D) # evenly spaced tau_D in the log scale base = 10
-    dtau_D = np.diff(tau_D)
-    dtau_D = np.append(dtau_D, dtau_D[n_tau_D-2])
-    a_avg = 1/n_tau_D # setting up the flat distribution
-    a_fit = np.zeros(n_tau_D)
-    G_fit = np.zeros(n_tau)
-    for i in range(n_tau_D):
-        a_fit[i] = a_avg
-    # Now, each row will correspond to a different tau_D value in the evenly distributed log space, and the columns
-    # are different values of lag time 
-    fun_fit = np.zeros((n_tau_D, n_tau))
-    for i in range(n_tau_D):
-        fun_fit[i] = fit_object.g3diffMEMFCS_fun(tau, tau_D[i])# this generates initial curves with flat distribution 
-    # fun_fit = np.transpose(fun_fit)
-    # iterations
-    stop_criterion = 5e-6
-    iterator = 0
-    x = 2e-4
-    r_chi_squared = list()
-    S = list()
-    alpha_f = list()
-    # fig, ax = plt.subplots(nrows = 1, ncols =2)
-    # ax[0].semilogx(tau, G, 'r', label = 'G observed')
-
-    while iterator<n_iterations:
-        sum_a_fit = np.sum(a_fit)
-        a_fit_normalized = a_fit/sum_a_fit
-        fun_fit = np.transpose(fun_fit)
-        G_fit = np.dot(fun_fit,a_fit_normalized) # ndarray wrt lag time (sum over all diffusion time components)
-        
-        G_fit_normalized = G_fit/G_fit[0] # Normalize G_fit
-        G_fit_normalized = G_fit_normalized*np.mean(G[0:10]) # scaled to the average amplitude of the first two points from the data
-        r = G_fit_normalized - G
-        weighted_r = r/sigma_G
-        r_chi_squared.append(np.sum((r/sigma_G)**2)/n_tau) # storing least squares
-        S.append(-np.sum(a_fit_normalized*np.log(a_fit_normalized))) # storing entropies
-        # ax[0].semilogx(tau, G_fit_normalized, 'g', label = 'G fit')
-        
-        # iteration termination criterion
-        if iterator % 2000 == 0 and iterator > 1:
-            r_chi_sq = np.asarray(r_chi_squared)
-            mask1 = np.full(len(r_chi_squared), False)
-            mask1[iterator-200:iterator-100] = True
-            mask2 = np.full(len(r_chi_squared), False)
-            mask2[iterator-100:iterator] = True
-            A1 = np.sum(r_chi_sq, where = mask1)
-            A2 = np.sum(r_chi_sq, where = mask2)
-            # print ((A1-A2)/A2)
-            if abs((A1 - A2)/A2) < stop_criterion:
-                print('stopping criterion reached')
-                break
-       
-        fun_fit = np.transpose(fun_fit)
-        # First order derivative of least-squares
-        D_r_chi_squared = np.sum(2*r*fun_fit/sigma_G**2, axis = 1)/n_tau
-        
-        # first order derivative of entropy
-        D_S = -1 - np.log(a_fit_normalized)
-        
-        # Scaling factor
-        alpha_f.append(abs(D_r_chi_squared)/(20*abs(D_S)))
-        # search direction construct
-        e_G = a_fit_normalized*(alpha_f[iterator]*D_S - D_r_chi_squared/2) # del Q * a_fit
-        # e_G = e_G/abs(e_G)
-        # update the a_fit using the search direction
-        a_fit_normalized = a_fit_normalized + e_G*x
-        for i in range(n_tau_D):
-            if a_fit_normalized[i] <= 0 : 
-                a_fit_normalized[i] = 0.0001
-        a_fit = a_fit_normalized
-        iterator +=1 
-        
-    parameters = {'tau D': tau_D, 'Amplitudes': a_fit_normalized}
-    param_cov = list()
-    print('Total number of iterations: ', iterator)
-    given_params = {'PSF_aspect_ratio':PSF_aspect_ratio, 'PSF_radius':PSF_radius}
-    # print('Hello')
-    # plt.plot(r_chi_squared, 'r')
-    # plt.plot(S, 'g')
-    # ax[1].semilogx(tau_D, a_fit, 'r')
-    # ── pass physical parameters into given_params ──
-    given_params = {
-        'PSF_aspect_ratio': PSF_aspect_ratio,
-        'PSF_radius': PSF_radius,
-        'temperature_K': temperature_K,
-        'viscosity_Pa_s': viscosity_Pa_s,
+    return {
+        "dist_csv_sh": dist_csv_sh,
+        "dist_csv_jy": dist_csv_jy,
+        "dist_svg":    dist_svg,
     }
-    return calculate.calculate_from_fit(
-        goodness_of_fit_criterion, count_rate, corrected_D, BG,
-        tau, G, sigma_G, G_fit_normalized,
-        0, parameters, param_cov, given_params, 'g3diffMEMFCS'
+
+def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG,
+                     PSF_radius, PSF_aspect_ratio, initial_params,
+                     goodness_of_fit_criterion,
+                     temperature_K: float = 293.15,
+                     viscosity_Pa_s: float = 1e-3):
+    """
+    Runs both Shannon MEMFCS and Shannon-Jaynes MEMFCS.
+    Returns a combined result dict containing both sets of outputs.
+    """
+    from theatrics.fcsfit.memfcs import (
+        run_memfcs,
+        fit_single_component,
+        make_jaynes_prior,
+        run_memfcs_jaynes,
+        build_kernel,
     )
+
+    tau_D_lims     = initial_params.get("tau_D limits",                  [-7, -1])
+    n_comp         = int(initial_params.get(
+                         "number of diffusion components",                200))
+    n_iter         = int(initial_params.get(
+                         "number of iterations",                          20000))
+    chi2_target    = float(initial_params.get("chi2 target",             1.0))
+    stop_criterion = float(initial_params.get("stop criterion",          5e-6))
+    stop_window    = int(initial_params.get("stop window",               100))
+    check_every    = int(initial_params.get("check every",               200))
+    width_decades  = float(initial_params.get("prior width decades",     0.5))
+
+    common_kwargs = dict(
+        psf_aspect_ratio = PSF_aspect_ratio,
+        tau_D_log_range  = (tau_D_lims[0], tau_D_lims[1]),
+        n_components     = n_comp,
+        n_iterations     = n_iter,
+        chi2_target      = chi2_target,
+        stop_criterion   = stop_criterion,
+        stop_window      = stop_window,
+        check_every      = check_every,
+        verbose          = False,
+    )
+
+    # ── Shannon MEMFCS (flat prior) ────────────────────────────
+    res_sh = run_memfcs(tau, G, sigma_G, **common_kwargs)
+
+    # ── Single-component fit for Jaynes prior ──────────────────
+    tau_D_fit, G0_fit, fit_ok, G_pred_fit, chi2_sc = (
+        fit_single_component(tau, G, sigma_G, PSF_aspect_ratio)
+    )
+
+    tau_D_grid = res_sh["tau_D"]
+    m          = make_jaynes_prior(tau_D_grid, tau_D_fit, width_decades)
+
+    # ── Shannon-Jaynes MEMFCS ──────────────────────────────────
+    res_jy = run_memfcs_jaynes(tau, G, sigma_G, m, **common_kwargs)
+
+    # ── helper: extract scalars from a result dict ─────────────
+    def _extract(res, PSF_r, temp_K, visc):
+        tau_D  = res["tau_D"]
+        alpha  = res["alpha"]
+        D_dist = (PSF_r ** 2) / (4.0 * tau_D)
+        k_B    = 1.380649e-23
+        D_m2s  = D_dist * 1e-12
+        R_h_nm = (k_B * temp_K /
+                  (6.0 * np.pi * visc * D_m2s)) * 1e9
+        pk_idx  = int(np.argmax(alpha))
+        pk_tau  = float(tau_D[pk_idx])
+        mn_tau  = res["mean_tau_D"]
+        pk_D    = float(D_dist[pk_idx])
+        mn_D    = float((PSF_r ** 2) / (4.0 * mn_tau))
+        pk_Rh   = float(R_h_nm[pk_idx])
+        mn_Rh   = float(np.sum(R_h_nm * alpha) / np.sum(alpha))
+        return {
+            "D_distribution":      D_dist,
+            "R_h_distribution_nm": R_h_nm,
+            "peak_tau_D":          pk_tau,
+            "mean_tau_D":          mn_tau,
+            "max_freq_D":          pk_D,
+            "mean_D":              mn_D,
+            "max_freq_R_h_nm":     pk_Rh,
+            "R_h_mean_nm":         mn_Rh,
+        }
+
+    ext_sh = _extract(res_sh, PSF_radius, temperature_K, viscosity_Pa_s)
+    ext_jy = _extract(res_jy, PSF_radius, temperature_K, viscosity_Pa_s)
+
+    # ── goodness of fit (use Shannon result as primary) ────────
+    weighted_r = res_sh["weighted_r"]
+    chi2_final = float(res_sh["chi2"])
+    BIC        = (len(tau) * np.log(
+                      float(np.sum(weighted_r**2)) / len(tau))
+                  + n_comp * np.log(len(tau)))
+
+    from theatrics.fcsfit.calculations import runs_test_criterion_func
+    p_ttest, p_wilcoxon, p_runstest, p_runstest_residuals = (
+        runs_test_criterion_func(weighted_r, goodness_of_fit_criterion)
+    )
+
+    return {
+        # ── primary fields (Shannon, for backward compatibility) ─
+        "PSF radius":              PSF_radius,
+        "PSF aspect ratio":        PSF_aspect_ratio,
+        "Chi squared":             chi2_final,
+        "r":                       res_sh["G_fit"] - G,
+        "weighted_r":              weighted_r,
+        "ccPrediction":            res_sh["G_fit"],
+        "Count Rate":              count_rate,
+        "p_ttest":                 p_ttest,
+        "p_wilcoxon":              p_wilcoxon,
+        "p_runstest":              p_runstest,
+        "p_runstest_residuals":    p_runstest_residuals,
+        "BIC":                     float(BIC),
+
+        # ── Shannon distribution ───────────────────────────────
+        "tau_D_distribution":          res_sh["tau_D"],
+        "alpha_distribution":          res_sh["alpha"],
+        "alpha_sigma_distribution":    np.zeros_like(res_sh["alpha"]),
+        "D_distribution":              ext_sh["D_distribution"],
+        "R_h_distribution_nm":         ext_sh["R_h_distribution_nm"],
+        "peak_tau_D":                  ext_sh["peak_tau_D"],
+        "mean tau diffusion":          ext_sh["mean_tau_D"],
+        "max_freq_tau_D":              ext_sh["peak_tau_D"],
+        "D":                           ext_sh["mean_D"],
+        "max_freq_D":                  ext_sh["max_freq_D"],
+        "R_h_mean_nm":                 ext_sh["R_h_mean_nm"],
+        "max_freq_R_h_nm":             ext_sh["max_freq_R_h_nm"],
+
+        # ── Shannon-Jaynes distribution ────────────────────────
+        "tau_D_distribution_jy":       res_jy["tau_D"],
+        "alpha_distribution_jy":       res_jy["alpha"],
+        "D_distribution_jy":           ext_jy["D_distribution"],
+        "R_h_distribution_nm_jy":      ext_jy["R_h_distribution_nm"],
+        "peak_tau_D_jy":               ext_jy["peak_tau_D"],
+        "mean_tau_D_jy":               ext_jy["mean_tau_D"],
+        "max_freq_D_jy":               ext_jy["max_freq_D"],
+        "mean_D_jy":                   ext_jy["mean_D"],
+        "max_freq_R_h_nm_jy":          ext_jy["max_freq_R_h_nm"],
+        "R_h_mean_nm_jy":              ext_jy["R_h_mean_nm"],
+        "G_fit_jy":                    res_jy["G_fit"],
+        "weighted_r_jy":               res_jy["weighted_r"],
+        "chi2_jy":                     float(res_jy["chi2"]),
+        "S_jy":                        float(res_jy["S"]),
+
+        # ── single-component fit ───────────────────────────────
+        "tau_D_fit_sc":                tau_D_fit,
+        "chi2_sc":                     chi2_sc,
+        "G_pred_sc":                   G_pred_fit,
+        "prior_m":                     m,
+        "prior_width_decades":         width_decades,
+
+        # ── physical parameters ────────────────────────────────
+        "temperature_K":               temperature_K,
+        "viscosity_Pa_s":              viscosity_Pa_s,
+
+        # ── algorithm diagnostics ──────────────────────────────
+        "n_iterations_run":            res_sh["n_iterations_run"],
+        "converged":                   res_sh["converged"],
+        "n_iterations_run_jy":         res_jy["n_iterations_run"],
+        "converged_jy":                res_jy["converged"],
+        "chi2_history":                res_sh["chi2_history"],
+        "S_history":                   res_sh["S_history"],
+        "chi2_history_jy":             res_jy["chi2_history"],
+        "S_history_jy":                res_jy["S_history"],
+
+        # ── backward-compatible keys ───────────────────────────
+        "Amplitudes":                  res_sh["alpha"],
+        "tau D":                       res_sh["tau_D"],
+    }
+# def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG,
+#                      PSF_radius, PSF_aspect_ratio, initial_params,
+#                      goodness_of_fit_criterion,
+#                      temperature_K: float = 293.15,
+#                      viscosity_Pa_s: float = 1e-3):
+#     """
+#     MEMFCS using the v9 algorithm (Sengupta et al. 2003).
+#     """
+#     from theatrics.fcsfit.memfcs import run_memfcs
+
+#     tau_D_lims     = initial_params.get("tau_D limits",                 [-7, -1])
+#     n_comp         = int(initial_params.get(
+#                          "number of diffusion components",               200))
+#     n_iter         = int(initial_params.get(
+#                          "number of iterations",                         20000))
+#     chi2_target    = float(initial_params.get("chi2 target",            1.0))
+#     stop_criterion = float(initial_params.get("stop criterion",         5e-6))
+#     stop_window    = int(initial_params.get("stop window",              100))
+#     check_every    = int(initial_params.get("check every",              200))
+
+#     result = run_memfcs(
+#         tau              = tau,
+#         G_data           = G,
+#         sigma_G          = sigma_G,
+#         psf_aspect_ratio = PSF_aspect_ratio,
+#         tau_D_log_range  = (tau_D_lims[0], tau_D_lims[1]),
+#         n_components     = n_comp,
+#         n_iterations     = n_iter,
+#         chi2_target      = chi2_target,
+#         stop_criterion   = stop_criterion,
+#         stop_window      = stop_window,
+#         check_every      = check_every,
+#         verbose          = False,
+#     )
+
+#     tau_D       = result["tau_D"]
+#     alpha       = result["alpha"]
+#     G_fit       = result["G_fit"]
+#     weighted_r  = result["weighted_r"]
+
+#     # ── diffusion coefficients ────────────────────────────────
+#     # D = w₀² / (4·τ_D)   with PSF_radius in µm → D in µm²/s
+#     D_dist = (PSF_radius ** 2) / (4.0 * tau_D)
+
+#     # ── hydrodynamic radius via Stokes-Einstein ───────────────
+#     k_B      = 1.380649e-23                        # J/K
+#     D_m2s    = D_dist * 1e-12                      # µm²/s → m²/s
+#     R_h_nm   = (
+#         k_B * temperature_K
+#         / (6.0 * np.pi * viscosity_Pa_s * D_m2s)
+#     ) * 1e9                                        # nm
+
+#     peak_idx    = int(np.argmax(alpha))
+#     peak_tau_D  = result["peak_tau_D"]
+#     mean_tau_D  = result["mean_tau_D"]
+#     peak_D      = float(D_dist[peak_idx])
+#     mean_D      = float((PSF_radius ** 2) / (4.0 * mean_tau_D))
+#     peak_R_h_nm = float(R_h_nm[peak_idx])
+#     total_alpha = float(np.sum(alpha))
+#     mean_R_h_nm = float(
+#         np.sum(R_h_nm * alpha) / total_alpha
+#     ) if total_alpha > 0 else float("nan")
+
+#     # ── goodness of fit ───────────────────────────────────────
+#     r_chi2 = float(result["chi2"])
+#     BIC    = (len(tau) * np.log(float(np.sum(weighted_r**2)) / len(tau))
+#               + n_comp * np.log(len(tau)))
+
+#     from theatrics.fcsfit.calculations import runs_test_criterion_func
+#     p_ttest, p_wilcoxon, p_runstest, p_runstest_residuals = (
+#         runs_test_criterion_func(weighted_r, goodness_of_fit_criterion)
+#     )
+
+#     return {
+#         # ── fields expected by the rest of the codebase ────────
+#         "PSF radius":              PSF_radius,
+#         "PSF aspect ratio":        PSF_aspect_ratio,
+#         "Chi squared":             r_chi2,
+#         "r":                       G_fit - G,
+#         "weighted_r":              weighted_r,
+#         "ccPrediction":            G_fit,
+#         "Count Rate":              count_rate,
+#         "p_ttest":                 p_ttest,
+#         "p_wilcoxon":              p_wilcoxon,
+#         "p_runstest":              p_runstest,
+#         "p_runstest_residuals":    p_runstest_residuals,
+#         "BIC":                     float(BIC),
+
+#         # ── distribution arrays ────────────────────────────────
+#         "tau_D_distribution":           tau_D,
+#         "alpha_distribution":           alpha,
+#         "alpha_sigma_distribution":     np.zeros_like(alpha),
+#         "D_distribution":               D_dist,
+#         "R_h_distribution_nm":          R_h_nm,
+
+#         # ── scalar summaries ───────────────────────────────────
+#         "peak_tau_D":              peak_tau_D,
+#         "mean tau diffusion":      mean_tau_D,
+#         "max_freq_tau_D":          peak_tau_D,
+#         "D":                       mean_D,
+#         "max_freq_D":              peak_D,
+#         "R_h_mean_nm":             mean_R_h_nm,
+#         "max_freq_R_h_nm":         peak_R_h_nm,
+#         "temperature_K":           temperature_K,
+#         "viscosity_Pa_s":          viscosity_Pa_s,
+
+#         # ── algorithm diagnostics ──────────────────────────────
+#         "n_iterations_run":        result["n_iterations_run"],
+#         "converged":               result["converged"],
+#         "chi2_history":            result["chi2_history"],
+#         "S_history":               result["S_history"],
+
+#         # ── backward-compatible keys ───────────────────────────
+#         "Amplitudes":              alpha,
+#         "tau D":                   tau_D,
+#     }
+# def g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion,temperature_K: float = 303.15,
+#                      viscosity_Pa_s: float = 1e-3):
+#     # object definition and initialization/construction
+
+#     fit_object = g3diffMEMFCS()
+#     fit_object.count_rate = count_rate
+#     fit_object.BG = BG
+#     fit_object.PSFaspectratio = PSF_aspect_ratio
+    
+#     # initital parameter definitions
+#     n_tau_D = initial_params['number of diffusion components']
+#     tau_D_lims = initial_params['tau_D limits']  
+#     n_iterations = initial_params['number of iterations']
+    
+#     # initialization with initial diffusion constant having a flat distribituion
+#     n_tau = len(tau)
+#     # n_tau_D = 200
+    
+#     tau_D = np.logspace(tau_D_lims[0],tau_D_lims[1],n_tau_D) # evenly spaced tau_D in the log scale base = 10
+#     dtau_D = np.diff(tau_D)
+#     dtau_D = np.append(dtau_D, dtau_D[n_tau_D-2])
+#     a_avg = 1/n_tau_D # setting up the flat distribution
+#     a_fit = np.zeros(n_tau_D)
+#     G_fit = np.zeros(n_tau)
+#     for i in range(n_tau_D):
+#         a_fit[i] = a_avg
+#     # Now, each row will correspond to a different tau_D value in the evenly distributed log space, and the columns
+#     # are different values of lag time 
+#     fun_fit = np.zeros((n_tau_D, n_tau))
+#     for i in range(n_tau_D):
+#         fun_fit[i] = fit_object.g3diffMEMFCS_fun(tau, tau_D[i])# this generates initial curves with flat distribution 
+#     # fun_fit = np.transpose(fun_fit)
+#     # iterations
+#     stop_criterion = 5e-6
+#     iterator = 0
+#     x = 2e-4
+#     r_chi_squared = list()
+#     S = list()
+#     alpha_f = list()
+#     # fig, ax = plt.subplots(nrows = 1, ncols =2)
+#     # ax[0].semilogx(tau, G, 'r', label = 'G observed')
+
+#     while iterator<n_iterations:
+#         sum_a_fit = np.sum(a_fit)
+#         a_fit_normalized = a_fit/sum_a_fit
+#         fun_fit = np.transpose(fun_fit)
+#         G_fit = np.dot(fun_fit,a_fit_normalized) # ndarray wrt lag time (sum over all diffusion time components)
+        
+#         G_fit_normalized = G_fit/G_fit[0] # Normalize G_fit
+#         G_fit_normalized = G_fit_normalized*np.mean(G[0:10]) # scaled to the average amplitude of the first two points from the data
+#         r = G_fit_normalized - G
+#         weighted_r = r/sigma_G
+#         r_chi_squared.append(np.sum((r/sigma_G)**2)/n_tau) # storing least squares
+#         S.append(-np.sum(a_fit_normalized*np.log(a_fit_normalized))) # storing entropies
+#         # ax[0].semilogx(tau, G_fit_normalized, 'g', label = 'G fit')
+        
+#         # iteration termination criterion
+#         if iterator % 2000 == 0 and iterator > 1:
+#             r_chi_sq = np.asarray(r_chi_squared)
+#             mask1 = np.full(len(r_chi_squared), False)
+#             mask1[iterator-200:iterator-100] = True
+#             mask2 = np.full(len(r_chi_squared), False)
+#             mask2[iterator-100:iterator] = True
+#             A1 = np.sum(r_chi_sq, where = mask1)
+#             A2 = np.sum(r_chi_sq, where = mask2)
+#             # print ((A1-A2)/A2)
+#             if abs((A1 - A2)/A2) < stop_criterion:
+#                 print('stopping criterion reached')
+#                 break
+       
+#         fun_fit = np.transpose(fun_fit)
+#         # First order derivative of least-squares
+#         D_r_chi_squared = np.sum(2*r*fun_fit/sigma_G**2, axis = 1)/n_tau
+        
+#         # first order derivative of entropy
+#         D_S = -1 - np.log(a_fit_normalized)
+        
+#         # Scaling factor
+#         alpha_f.append(abs(D_r_chi_squared)/(20*abs(D_S)))
+#         # search direction construct
+#         e_G = a_fit_normalized*(alpha_f[iterator]*D_S - D_r_chi_squared/2) # del Q * a_fit
+#         # e_G = e_G/abs(e_G)
+#         # update the a_fit using the search direction
+#         a_fit_normalized = a_fit_normalized + e_G*x
+#         for i in range(n_tau_D):
+#             if a_fit_normalized[i] <= 0 : 
+#                 a_fit_normalized[i] = 0.0001
+#         a_fit = a_fit_normalized
+#         iterator +=1 
+        
+#     parameters = {'tau D': tau_D, 'Amplitudes': a_fit_normalized}
+#     param_cov = list()
+#     print('Total number of iterations: ', iterator)
+#     given_params = {'PSF_aspect_ratio':PSF_aspect_ratio, 'PSF_radius':PSF_radius}
+#     # print('Hello')
+#     # plt.plot(r_chi_squared, 'r')
+#     # plt.plot(S, 'g')
+#     # ax[1].semilogx(tau_D, a_fit, 'r')
+#     # ── pass physical parameters into given_params ──
+#     given_params = {
+#         'PSF_aspect_ratio': PSF_aspect_ratio,
+#         'PSF_radius': PSF_radius,
+#         'temperature_K': temperature_K,
+#         'viscosity_Pa_s': viscosity_Pa_s,
+#     }
+#     return calculate.calculate_from_fit(
+#         goodness_of_fit_criterion, count_rate, corrected_D, BG,
+#         tau, G, sigma_G, G_fit_normalized,
+#         0, parameters, param_cov, given_params, 'g3diffMEMFCS'
+#     )
     # return calculate.calculate_from_fit(goodness_of_fit_criterion, count_rate, corrected_D, BG,tau, G, sigma_G, G_fit_normalized,0, parameters, param_cov,given_params ,'g3diffMEMFCS')
 
     # display figures for 2 seconds
@@ -1600,29 +2049,46 @@ def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radiu
             tau, G, sigma_G, count_rate, corrected_D, BG,
             PSF_radius, PSF_aspect_ratio, initial_params,
             goodness_of_fit_criterion,
-            temperature_K=initial_params.get('temperature_K', 303.15),
-            viscosity_Pa_s=initial_params.get('viscosity_Pa_s', 1e-3),
+            temperature_K  = initial_params.get('temperature_K',  293.15),
+            viscosity_Pa_s = initial_params.get('viscosity_Pa_s', 1e-3),
         )
+
+        # store data arrays so _save_memfcs_distribution can plot them
+        return_dict["tau_used"]   = tau
+        return_dict["G_used"]     = G
+        return_dict["sigma_used"] = sigma_G
+
         estimate_data = {
-            'Count Rate': [return_dict['Count Rate']],
-            'Chi squared': [return_dict['Chi squared']],
-            'Mean Tau D': [return_dict['mean tau diffusion']],
-            'D': [return_dict['D']],
-            'BIC': [return_dict['BIC']],
-            'p_ttest': [return_dict['p_ttest']],
-            'p_wilcoxon': [return_dict['p_wilcoxon']],
-            'p_runstest': [return_dict['p_runstest']],
-            'p_runstest_residuals': [return_dict['p_runstest_residuals']],
+            'Count Rate':            [return_dict['Count Rate']],
+            'Chi squared (Shannon)': [return_dict['Chi squared']],
+            'Chi squared (Jaynes)':  [return_dict.get('chi2_jy', np.nan)],
+            'Chi squared (1-comp)':  [return_dict.get('chi2_sc', np.nan)],
+            'Mean Tau D (Shannon)':  [return_dict['mean tau diffusion']],
+            'Mean Tau D (Jaynes)':   [return_dict.get('mean_tau_D_jy', np.nan)],
+            'D (Shannon)':           [return_dict['D']],
+            'D (Jaynes)':            [return_dict.get('mean_D_jy', np.nan)],
+            'peak D (Shannon)':      [return_dict['max_freq_D']],
+            'peak D (Jaynes)':       [return_dict.get('max_freq_D_jy', np.nan)],
+            'D (1-comp fit)':        [PSF_radius**2 /
+                                       (4 * return_dict.get('tau_D_fit_sc', 1e-4))],
+            'R_h mean (Shannon)':    [return_dict['R_h_mean_nm']],
+            'R_h mean (Jaynes)':     [return_dict.get('R_h_mean_nm_jy', np.nan)],
+            'Converged (Shannon)':   [return_dict['converged']],
+            'Converged (Jaynes)':    [return_dict.get('converged_jy', False)],
+            'BIC':                   [return_dict['BIC']],
+            'p_ttest':               [return_dict['p_ttest']],
+            'p_wilcoxon':            [return_dict['p_wilcoxon']],
+            'p_runstest':            [return_dict['p_runstest']],
+            'p_runstest_residuals':  [return_dict['p_runstest_residuals']],
         }
 
-        # Save distribution CSV + SVG next to the input file
-        # `path` here is already the base path without ".csv"
+        # save combined figure + CSVs
         results_dir = os.path.join(os.path.dirname(path), "Results")
         os.makedirs(results_dir, exist_ok=True)
-        dist_base = os.path.join(results_dir, os.path.basename(path))
-        mem_paths = _save_memfcs_distribution(dist_base, return_dict)
+        dist_base   = os.path.join(results_dir, os.path.basename(path))
+        dist_paths  = _save_memfcs_distribution(dist_base, return_dict)
         warnings_list.append(
-            f"MEMFCS distribution saved: {mem_paths['dist_csv']}"
+            f"MEMFCS outputs saved: {dist_paths['dist_svg']}"
         )
     # elif fitting_model == 'g3diffMEMFCS':
     #     return_dict = g3diffMEMFCS_fit(tau, G, sigma_G, count_rate, corrected_D, BG, PSF_radius, PSF_aspect_ratio, initial_params, goodness_of_fit_criterion)
@@ -1640,34 +2106,47 @@ def main(path, fitting_model, result_name, corrected_D, save_path, BG, PSF_radiu
      # ---- compute-only return for GUI ----
     # NOTE: `path` is the base path WITHOUT ".csv" (your code reads path + ".csv")
     out = {
-        "base_path": str(path),
-        "fitting_model": str(fitting_model),
-
-        "tau": tau,
-        "G": G,
-        "sigma_G": sigma_G,
-
-        "ccPrediction": return_dict.get("ccPrediction"),
-        "weighted_r": return_dict.get("weighted_r"),
-
-        "N": return_dict.get("N"),
+        "base_path":      str(path),
+        "fitting_model":  str(fitting_model),
+        "tau":            tau,
+        "G":              G,
+        "sigma_G":        sigma_G,
+        "ccPrediction":   return_dict.get("ccPrediction"),
+        "weighted_r":     return_dict.get("weighted_r"),
+        "N":              return_dict.get("N"),
         "PSF_aspect_ratio": return_dict.get("PSF aspect ratio"),
-        "offset": return_dict.get("offset", 0.0),
+        "offset":         return_dict.get("offset", 0.0),
+        "estimate_data":  estimate_data,
+        "return_dict":    return_dict,
+        "warnings":       warnings_list,
 
-        "estimate_data": estimate_data,
-        "return_dict": return_dict,
-        "warnings": warnings_list,
-
-        # MEMFCS-only — None for all other models
-        "memfcs_tau_D": return_dict.get("tau_D_distribution"),
-        "memfcs_D": return_dict.get("D_distribution"),
-        "memfcs_amplitudes": return_dict.get("Amplitudes"),
-        "memfcs_max_freq_D": return_dict.get("max_freq_D"),
+        # Shannon MEMFCS
+        "memfcs_tau_D":          return_dict.get("tau_D_distribution"),
+        "memfcs_D":              return_dict.get("D_distribution"),
+        "memfcs_amplitudes":     return_dict.get("Amplitudes"),
+        "memfcs_max_freq_D":     return_dict.get("max_freq_D"),
         "memfcs_max_freq_tau_D": return_dict.get("max_freq_tau_D"),
-        "memfcs_mean_tau_D": return_dict.get("mean tau diffusion"),
-        "memfcs_R_h_nm":        return_dict.get("R_h_distribution_nm"),      # ← new
-        "memfcs_R_h_mean_nm":   return_dict.get("R_h_mean_nm"),              # ← new
-        "memfcs_max_freq_R_h":  return_dict.get("max_freq_R_h_nm"),          # ← new
+        "memfcs_mean_tau_D":     return_dict.get("mean tau diffusion"),
+        "memfcs_R_h_nm":         return_dict.get("R_h_distribution_nm"),
+        "memfcs_R_h_mean_nm":    return_dict.get("R_h_mean_nm"),
+        "memfcs_max_freq_R_h":   return_dict.get("max_freq_R_h_nm"),
+
+        # Shannon-Jaynes MEMFCS
+        "memfcs_tau_D_jy":          return_dict.get("tau_D_distribution_jy"),
+        "memfcs_D_jy":              return_dict.get("D_distribution_jy"),
+        "memfcs_amplitudes_jy":     return_dict.get("alpha_distribution_jy"),
+        "memfcs_max_freq_D_jy":     return_dict.get("max_freq_D_jy"),
+        "memfcs_mean_tau_D_jy":     return_dict.get("mean_tau_D_jy"),
+        "memfcs_R_h_nm_jy":         return_dict.get("R_h_distribution_nm_jy"),
+        "memfcs_R_h_mean_nm_jy":    return_dict.get("R_h_mean_nm_jy"),
+        "memfcs_max_freq_R_h_jy":   return_dict.get("max_freq_R_h_nm_jy"),
+        "memfcs_G_fit_jy":          return_dict.get("G_fit_jy"),
+        "memfcs_chi2_jy":           return_dict.get("chi2_jy"),
+        "memfcs_chi2_sc":           return_dict.get("chi2_sc"),
+        "memfcs_D_fit_sc":          (
+            0.25**2 / (4 * return_dict["tau_D_fit_sc"])
+            if return_dict.get("tau_D_fit_sc") else None
+        ),
     }
     return out
    

@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
 Name: theatrics
-Version: 1.7.2
-Summary: GUI for RICS, SFCS, FCS Fitting, FRAP, and vesicle analysis
+Version: 1.9.2
+Summary: GUI for RICS, SFCS, FCS Fitting, ICS, FRAP, AFM and vesicle analysis
 Author-email: Yusuf Qutbuddin <yusuf.qutbuddin@gmail.com>
 License: BSD 3-Clause License
         
@@ -49,6 +49,7 @@ Requires-Dist: lmfit
 Requires-Dist: statsmodels
 Requires-Dist: openpyxl
 Requires-Dist: path
+Requires-Dist: AFMReader
 Provides-Extra: opencv
 Requires-Dist: opencv-python; extra == "opencv"
 Provides-Extra: cellpose
