@@ -36,7 +36,8 @@ from theatrics.workers.diffmap_worker import diffusion_map_process_main
 from theatrics.workers.fcsfit_worker import fcsfit_process_main
 from theatrics.workers.frap_worker import frap_process_main
 from theatrics.workers.vesicle_worker import vesicle_process_main
-
+from theatrics.workers.ics_worker import ics_process_main
+from theatrics.workers.afm_worker import afm_worker_main
 
 from theatrics.vesicle import detection as vesicle_detection
 from theatrics.fcsfit import calculations as calculate
@@ -110,6 +111,8 @@ class ModularRICSGUI:
         self.create_SFCS_tab()
         self.create_fcs_fit_tab()
         self.create_frap_tab()
+        self.create_ics_tab()
+        self.create_afm_tab()
         self.create_vesicle_tab()
         self.create_results_tab()
 
@@ -2015,13 +2018,20 @@ class ModularRICSGUI:
             "tau characteristic decay short": 30,
             "tau characteristic decay long": 1000,
 
-            "tau_D limits": [-7, -1],
+            "tau_D limits":                  [-7, -1],
             "number of diffusion components": 200,
-            "number of iterations": 20000,
+            "number of iterations":           20000,   # increased from 10000
+            "chi2 target":                    1.0,
+            "stop criterion":                 5e-6,
+            "stop window":                    100,
+            "check every":                    200,
+            "viscosity_mPas":                 0.835,
+            
+            "prior width decades": 0.5,
             # in fcs_default_initial_params()
             "offset": 0.0,
-            "temperature_K": 303.15,        # 20 °C — kept in sync with experiment_T below
-            "viscosity_mPas": 1.002,        # mPa·s — water at 20 °C
+               
+            
         }
     def _parse_param_value(self, s: str):
         s = s.strip()
@@ -2077,8 +2087,18 @@ class ModularRICSGUI:
             "siFCSTwoComponents": ["G0_1", "G0_2", "tau characteristic decay short", "tau characteristic decay long"],
 
             # MEMFCS
-            "g3diffMEMFCS": ["tau_D limits", "number of diffusion components", "number of iterations","viscosity_mPas",        # ← new
-                "temperature_K",         ],
+            "g3diffMEMFCS": [
+                "tau_D limits",
+                "number of diffusion components",
+                "number of iterations",
+                "chi2 target",
+                "stop criterion",
+                "stop window",
+                "check every",
+                "prior width decades",
+                "viscosity_mPas",
+                # "temperature_K"  ← removed, taken from Experiment T field
+            ],
         }
     def _safe_float_from_str(self, value, name: str, fallback: float) -> float:
         """Parse a raw value (str, int, or float) as float with fallback."""
@@ -2090,6 +2110,135 @@ class ModularRICSGUI:
         except (ValueError, TypeError):
             self.log_message(f"WARNING: invalid value for '{name}', using {fallback}")
             return fallback
+    def _log_memfcs_interpretation(self, res: dict):
+        """
+        Log the MEMFCS interpretation guide to the Results & Logs tab.
+        """
+        chi2_sc  = res.get("memfcs_chi2_sc",    float("nan"))
+        chi2_sh  = float(res.get("return_dict",
+                                  {}).get("Chi squared", float("nan")))
+        chi2_jy  = res.get("memfcs_chi2_jy",    float("nan"))
+        pk_D_sh  = res.get("memfcs_max_freq_D")
+        pk_D_jy  = res.get("memfcs_max_freq_D_jy")
+        mn_D_sh  = res.get("return_dict", {}).get("D")
+        mn_D_jy  = res.get("return_dict", {}).get("mean_D_jy")
+        pk_Rh_sh = res.get("memfcs_max_freq_R_h")
+        pk_Rh_jy = res.get("memfcs_max_freq_R_h_jy")
+        conv_sh  = res.get("return_dict", {}).get("converged",    False)
+        conv_jy  = res.get("return_dict", {}).get("converged_jy", False)
+
+        self.log_message("─" * 60)
+        self.log_message("MEMFCS RESULTS SUMMARY")
+        self.log_message("─" * 60)
+        self.log_message(
+            f"Single-component fit chi2 = {chi2_sc:.3f}"
+        )
+        self.log_message(
+            f"Shannon MEMFCS:  chi2={chi2_sh:.4f}  "
+            f"peak D={pk_D_sh:.1f} µm²/s  "
+            f"mean D={mn_D_sh:.1f} µm²/s  "
+            f"peak R_h={pk_Rh_sh:.2f} nm  "
+            f"converged={conv_sh}"
+        )
+        self.log_message(
+            f"Jaynes MEMFCS:   chi2={chi2_jy:.4f}  "
+            f"peak D={pk_D_jy:.1f} µm²/s  "
+            f"mean D={mn_D_jy:.1f} µm²/s  "
+            f"peak R_h={pk_Rh_jy:.2f} nm  "
+            f"converged={conv_jy}"
+        )
+        self.log_message("")
+        self.log_message("INTERPRETATION GUIDE")
+        self.log_message("─" * 60)
+
+        if not np.isnan(chi2_sc):
+            if chi2_sc < 2.0:
+                self.log_message(
+                    f"✓ Single-component chi2={chi2_sc:.2f} < 2  →  "
+                    f"data is CONSISTENT with a single species."
+                )
+                self.log_message(
+                    "  Both Shannon and Jaynes should give a single peak "
+                    "at the same D."
+                )
+                self.log_message(
+                    "  Jaynes will give a SHARPER peak (prior reinforces "
+                    "single-species interpretation)."
+                )
+                self.log_message(
+                    "  Agreement between the two methods is strong "
+                    "evidence for sample homogeneity."
+                )
+            elif chi2_sc < 10.0:
+                self.log_message(
+                    f"⚠ Single-component chi2={chi2_sc:.2f} (2–10)  →  "
+                    f"MILD heterogeneity suggested."
+                )
+                self.log_message(
+                    "  Shannon MEMFCS may reveal a secondary population."
+                )
+                self.log_message(
+                    "  Jaynes MEMFCS will only deviate from the "
+                    "single-species prior as much as the data demands."
+                )
+                self.log_message(
+                    "  Compare peak positions — if they agree, the "
+                    "secondary peak in Shannon may be a noise artefact."
+                )
+            else:
+                self.log_message(
+                    f"✗ Single-component chi2={chi2_sc:.2f} >> 2  →  "
+                    f"data REQUIRES more than one species."
+                )
+                self.log_message(
+                    "  Shannon MEMFCS will reveal the heterogeneous "
+                    "distribution without bias."
+                )
+                self.log_message(
+                    "  Jaynes MEMFCS uses the fastest species as its "
+                    "prior — secondary peaks are suppressed unless "
+                    "strongly required."
+                )
+                self.log_message(
+                    "  Prefer Shannon for unbiased characterisation of "
+                    "heterogeneous samples."
+                )
+
+        self.log_message("")
+        if (pk_D_sh is not None and pk_D_jy is not None
+                and not np.isnan(pk_D_sh) and not np.isnan(pk_D_jy)):
+            ratio = max(pk_D_sh, pk_D_jy) / max(
+                min(pk_D_sh, pk_D_jy), 1e-10
+            )
+            if ratio < 1.5:
+                self.log_message(
+                    f"✓ Shannon peak D = {pk_D_sh:.1f} µm²/s  "
+                    f"Jaynes peak D = {pk_D_jy:.1f} µm²/s  "
+                    f"(ratio = {ratio:.2f} < 1.5)"
+                )
+                self.log_message(
+                    "  Both methods agree on peak D  →  "
+                    "ROBUST result independent of prior choice."
+                )
+            else:
+                self.log_message(
+                    f"⚠ Shannon peak D = {pk_D_sh:.1f} µm²/s  "
+                    f"Jaynes peak D = {pk_D_jy:.1f} µm²/s  "
+                    f"(ratio = {ratio:.2f} > 1.5)"
+                )
+                self.log_message(
+                    "  Methods disagree  →  result depends on prior "
+                    "choice. Consider varying 'prior width decades'."
+                )
+
+        self.log_message("")
+        self.log_message(
+            "Prior width guide:  "
+            "0.25d = very conservative (tight single-species bias)  |  "
+            "0.5d = moderate  |  "
+            "1.0d ≈ flat Shannon prior"
+        )
+        self.log_message("─" * 60)
     def run_fcsfit(self):
         if self._is_worker_running("fcsfit_proc"):
             messagebox.showwarning("Warning", "FCS fitting is already running.")
@@ -2106,7 +2255,7 @@ class ModularRICSGUI:
         tau_min = self._safe_float(self.fcsfit_tau_min, "Tau min", 1e-6)
         tau_max = self._safe_float(self.fcsfit_tau_max, "Tau max", 1.0)
         # experiment_T is in °C; MEMFCS needs Kelvin and viscosity in Pa·s
-        T_C = self._safe_float(self.fcsfit_expt_T, "Experiment T", 30.0)
+        T_C = self._safe_float(self.fcsfit_expt_T, "Experiment T", 28.0)
 
         initial_params = dict(self.fcs_default_initial_params())
         # update temperature_K in params so the editor shows the correct value
@@ -2125,8 +2274,8 @@ class ModularRICSGUI:
             initial_params["F_Blink"] = initial_params["F_B"]
         # convert viscosity from mPa·s (GUI) → Pa·s (SI, needed by calculations)
         eta_mPas = self._safe_float_from_str(
-            initial_params.get('viscosity_mPas', 1.002),
-            'viscosity_mPas', 1.002
+            initial_params.get('viscosity_mPas', 0.8324),
+            'viscosity_mPas', 0.8324
         )
         initial_params['viscosity_Pa_s'] = eta_mPas * 1e-3
         model = self.fcsfit_model.get()
@@ -2137,7 +2286,7 @@ class ModularRICSGUI:
             user_tau_domain=True,
             psf_radius_um=self._safe_float(self.fcsfit_psf_radius, "PSF radius", 0.25),
             psf_aspect_ratio=self._safe_float(self.fcsfit_psf_ar, "PSF aspect ratio", 5.0),
-            experiment_T=self._safe_float(self.fcsfit_expt_T, "Experiment T", 30.0),
+            experiment_T=self._safe_float(self.fcsfit_expt_T, "Experiment T", 28.0),
             BG_value=0.0,
             user_initial_params=True,
             initial_params=initial_params,
@@ -2182,86 +2331,119 @@ class ModularRICSGUI:
         gs = gridspec.GridSpec(2, 2, figure=self.fcsfit_fig)
 
         fitting_model = res["fitting_model"]
-        base_path = res["base_path"]
+        base_path     = res["base_path"]
 
-        tau     = np.asarray(res["tau"],       dtype=float)
-        G       = np.asarray(res["G"],         dtype=float)
-        sigma   = np.asarray(res["sigma_G"],   dtype=float)
-        pred    = np.asarray(res["ccPrediction"], dtype=float)
-        wr      = np.asarray(res["weighted_r"],   dtype=float)
+        tau   = np.asarray(res["tau"],          dtype=float)
+        G     = np.asarray(res["G"],            dtype=float)
+        sigma = np.asarray(res["sigma_G"],      dtype=float)
+        pred  = np.asarray(res["ccPrediction"], dtype=float)
+        wr    = np.asarray(res["weighted_r"],   dtype=float)
 
         is_memfcs = (fitting_model == "g3diffMEMFCS")
 
-        # ── top-left: correlation curve ──
+        # ── top-left: correlation curve ───────────────────────────
         ax00 = self.fcsfit_fig.add_subplot(gs[0, 0])
         ax00.semilogx(tau, G,    "r",  label="G observed")
-        ax00.semilogx(tau, pred, "g",  label="G fit")
+        ax00.semilogx(tau, pred, "g",
+                      label="Shannon fit" if is_memfcs else "G fit")
         ax00.fill_between(tau, G - sigma, G + sigma,
                           color="b", alpha=0.2, label="±σ")
+
+        if is_memfcs:
+            G_fit_jy = res.get("memfcs_G_fit_jy")
+            if G_fit_jy is not None:
+                ax00.semilogx(tau,
+                              np.asarray(G_fit_jy, dtype=float),
+                              "b--", linewidth=1.8, label="Jaynes fit")
+            rd = res.get("return_dict", {})
+            G_pred_sc = rd.get("G_pred_sc")
+            if G_pred_sc is not None:
+                ax00.semilogx(tau,
+                              np.asarray(G_pred_sc, dtype=float),
+                              "k:", linewidth=1.5,
+                              label=(f"1-comp "
+                                     f"chi2={rd.get('chi2_sc', 0):.2f}"))
+
         ax00.set_xlabel("τ (s)")
         ax00.set_ylabel("G(τ)")
         ax00.set_title("Correlation curve")
         ax00.legend(fontsize=8)
         ax00.grid(True, alpha=0.3)
 
-        # ── top-right: weighted residuals vs τ ──
+        # ── top-right: weighted residuals ─────────────────────────
         ax01 = self.fcsfit_fig.add_subplot(gs[0, 1])
-        ax01.semilogx(tau, wr, "b")
-        ax01.axhline(0, color="k", lw=1, alpha=0.5)
+        ax01.semilogx(tau, wr, "g", linewidth=1,
+                      label="Shannon" if is_memfcs else None)
+        ax01.axhline( 0, color="k", lw=1,   alpha=0.5)
+        ax01.axhline( 3, color="r", lw=0.8, alpha=0.5, linestyle="--")
+        ax01.axhline(-3, color="r", lw=0.8, alpha=0.5, linestyle="--")
+
+        if is_memfcs:
+            rd    = res.get("return_dict", {})
+            wr_jy = rd.get("weighted_r_jy")
+            if wr_jy is not None:
+                ax01.semilogx(tau,
+                              np.asarray(wr_jy, dtype=float),
+                              "b", linewidth=1, alpha=0.7, label="Jaynes")
+            ax01.legend(fontsize=8)
+
         ax01.set_xlabel("τ (s)")
         ax01.set_ylabel("Weighted residual")
         ax01.set_title("Weighted residuals")
         ax01.grid(True, alpha=0.3)
 
-        # ── bottom-left: MEMFCS → distribution panels  /  others → iMSD ──
+        # ── bottom-left: D distribution (MEMFCS) / iMSD (others) ─
         ax10 = self.fcsfit_fig.add_subplot(gs[1, 0])
 
         if is_memfcs:
-            # pull the distribution arrays from the result dict
-            memfcs_D    = res.get("memfcs_D")
-            memfcs_amps = res.get("memfcs_amplitudes")
-            memfcs_R_h  = res.get("memfcs_R_h_nm")
+            memfcs_D       = res.get("memfcs_D")
+            memfcs_amps    = res.get("memfcs_amplitudes")
+            memfcs_D_jy    = res.get("memfcs_D_jy")
+            memfcs_amps_jy = res.get("memfcs_amplitudes_jy")
 
             if memfcs_D is not None and memfcs_amps is not None:
                 memfcs_D    = np.asarray(memfcs_D,    dtype=float)
                 memfcs_amps = np.asarray(memfcs_amps, dtype=float)
-
-                # D distribution on the primary axis
                 ax10.semilogx(memfcs_D, memfcs_amps,
-                              color="seagreen", linewidth=2, label="D distribution")
-
+                              color="seagreen", linewidth=2, label="Shannon")
                 max_D = res.get("memfcs_max_freq_D")
                 if max_D is not None:
                     ax10.axvline(float(max_D), color="tomato",
                                  linestyle="--", linewidth=1.5,
-                                 label=f"peak D = {float(max_D):.3e} µm²/s")
+                                 label=f"Sh peak {float(max_D):.1f} µm²/s")
 
-                ax10.set_xlabel("Diffusion coefficient D (µm²/s)")
-                ax10.set_ylabel("Amplitude")
-                ax10.set_title("MEMFCS — D distribution")
-                ax10.legend(fontsize=8)
-                ax10.grid(True, alpha=0.3)
+            if memfcs_D_jy is not None and memfcs_amps_jy is not None:
+                memfcs_D_jy    = np.asarray(memfcs_D_jy,    dtype=float)
+                memfcs_amps_jy = np.asarray(memfcs_amps_jy, dtype=float)
+                ax10.semilogx(memfcs_D_jy, memfcs_amps_jy,
+                              color="steelblue", linewidth=2,
+                              linestyle="--", label="Jaynes")
+                max_D_jy = res.get("memfcs_max_freq_D_jy")
+                if max_D_jy is not None:
+                    ax10.axvline(float(max_D_jy), color="navy",
+                                 linestyle=":", linewidth=1.5,
+                                 label=f"Jy peak {float(max_D_jy):.1f} µm²/s")
 
-                # R_h distribution overlaid on a twin x-axis if available
-                if memfcs_R_h is not None:
-                    memfcs_R_h = np.asarray(memfcs_R_h, dtype=float)
+            D_fit_sc = res.get("memfcs_D_fit_sc")
+            if D_fit_sc is not None and not np.isnan(float(D_fit_sc)):
+                ax10.axvline(float(D_fit_sc), color="k",
+                             linestyle=":", linewidth=1.5,
+                             label=f"1-comp {float(D_fit_sc):.1f} µm²/s")
 
-                    # use the bottom-right panel for R_h so both are visible
-                    # (we will replace the residual histogram with R_h for MEMFCS)
-                    pass   # handled below in ax11 block
-            else:
-                ax10.text(0.5, 0.5, "No MEMFCS distribution data",
-                          ha="center", va="center", transform=ax10.transAxes)
-                ax10.set_title("MEMFCS — D distribution")
+            ax10.set_xlabel("D (µm²/s)")
+            ax10.set_ylabel("Amplitude")
+            ax10.set_title("MEMFCS — D distribution\n"
+                           "green=Shannon  blue=Jaynes  black=1-comp")
+            ax10.legend(fontsize=7)
+            ax10.grid(True, alpha=0.3)
 
         else:
-            # existing iMSD logic unchanged
             reIMSD = None
-            if fitting_model not in ["siFCS", "siFCSTwoComponents", "g3diffMEMFCS"]:
+            if fitting_model not in ["siFCS", "siFCSTwoComponents",
+                                     "g3diffMEMFCS"]:
                 aR     = res.get("PSF_aspect_ratio")
                 N      = res.get("N")
                 offset = res.get("offset", 0.0)
-
                 if aR is not None and N is not None:
                     from theatrics.fcsfit import calculations as calculate
                     reIMSD = calculate.iMSD_calc(
@@ -2286,45 +2468,57 @@ class ModularRICSGUI:
             ax10.set_xlabel("τ (s)")
             ax10.grid(True, alpha=0.3)
 
-        # ── bottom-right: MEMFCS → R_h distribution  /  others → residual histogram ──
+        # ── bottom-right: R_h (MEMFCS) / residual histogram (others)
         ax11 = self.fcsfit_fig.add_subplot(gs[1, 1])
 
         if is_memfcs:
-            memfcs_R_h  = res.get("memfcs_R_h_nm")
-            memfcs_amps = res.get("memfcs_amplitudes")
+            memfcs_R_h     = res.get("memfcs_R_h_nm")
+            memfcs_amps    = res.get("memfcs_amplitudes")
+            memfcs_R_h_jy  = res.get("memfcs_R_h_nm_jy")
+            memfcs_amps_jy = res.get("memfcs_amplitudes_jy")
 
             if memfcs_R_h is not None and memfcs_amps is not None:
                 memfcs_R_h  = np.asarray(memfcs_R_h,  dtype=float)
                 memfcs_amps = np.asarray(memfcs_amps, dtype=float)
-
                 ax11.semilogx(memfcs_R_h, memfcs_amps,
                               color="mediumpurple", linewidth=2,
-                              label="R_h distribution")
-
-                max_R_h = res.get("memfcs_max_freq_R_h")
+                              label="Shannon")
+                max_R_h  = res.get("memfcs_max_freq_R_h")
                 mean_R_h = res.get("memfcs_R_h_mean_nm")
-
                 if max_R_h is not None:
                     ax11.axvline(float(max_R_h), color="tomato",
                                  linestyle="--", linewidth=1.5,
-                                 label=f"peak  {float(max_R_h):.2f} nm")
+                                 label=f"Sh peak {float(max_R_h):.2f} nm")
                 if mean_R_h is not None:
                     ax11.axvline(float(mean_R_h), color="orange",
                                  linestyle=":", linewidth=1.5,
-                                 label=f"mean  {float(mean_R_h):.2f} nm")
+                                 label=f"Sh mean {float(mean_R_h):.2f} nm")
 
-                ax11.set_xlabel("Hydrodynamic radius R_h (nm)")
-                ax11.set_ylabel("Amplitude")
-                ax11.set_title("MEMFCS — R_h distribution")
-                ax11.legend(fontsize=8)
-                ax11.grid(True, alpha=0.3)
-            else:
-                ax11.text(0.5, 0.5, "No R_h data available",
-                          ha="center", va="center", transform=ax11.transAxes)
-                ax11.set_title("MEMFCS — R_h distribution")
+            if memfcs_R_h_jy is not None and memfcs_amps_jy is not None:
+                memfcs_R_h_jy  = np.asarray(memfcs_R_h_jy,  dtype=float)
+                memfcs_amps_jy = np.asarray(memfcs_amps_jy, dtype=float)
+                ax11.semilogx(memfcs_R_h_jy, memfcs_amps_jy,
+                              color="navy", linewidth=2,
+                              linestyle="--", label="Jaynes")
+                max_R_h_jy  = res.get("memfcs_max_freq_R_h_jy")
+                mean_R_h_jy = res.get("memfcs_R_h_mean_nm_jy")
+                if max_R_h_jy is not None:
+                    ax11.axvline(float(max_R_h_jy), color="navy",
+                                 linestyle="--", linewidth=1.5,
+                                 label=f"Jy peak {float(max_R_h_jy):.2f} nm")
+                if mean_R_h_jy is not None:
+                    ax11.axvline(float(mean_R_h_jy), color="steelblue",
+                                 linestyle=":", linewidth=1.5,
+                                 label=f"Jy mean {float(mean_R_h_jy):.2f} nm")
+
+            ax11.set_xlabel("Hydrodynamic radius R_h (nm)")
+            ax11.set_ylabel("Amplitude")
+            ax11.set_title("MEMFCS — R_h distribution\n"
+                           "purple=Shannon  navy=Jaynes")
+            ax11.legend(fontsize=7)
+            ax11.grid(True, alpha=0.3)
 
         else:
-            # existing weighted residual histogram unchanged
             finite = np.isfinite(wr)
             ax11.hist(wr[finite], bins=40, density=True)
             ax11.set_xlabel("Weighted residual")
@@ -2334,19 +2528,19 @@ class ModularRICSGUI:
         self.fcsfit_fig.tight_layout()
         self.fcsfit_canvas.draw()
 
-        # ── per-file outputs (unchanged logic) ──
+        # ── per-file outputs ──────────────────────────────────────
         edit_path = self.fcs_make_edit_path(base_path, fitting_model)
 
-        self.fcsfit_fig.savefig(
-            edit_path + ".svg", dpi=300, bbox_inches="tight", facecolor="white"
-        )
+        if write_summary:
+            self.fcsfit_fig.savefig(
+                edit_path + ".svg", dpi=300,
+                bbox_inches="tight", facecolor="white"
+            )
+            cc_fits_df = pd.DataFrame({
+                "tau": tau, "G": G, "sigma G": sigma, "cc Fit": pred
+            })
+            cc_fits_df.to_csv(edit_path + ".csv", header=True, index=False)
 
-        cc_fits_df = pd.DataFrame({
-            "tau": tau, "G": G, "sigma G": sigma, "cc Fit": pred
-        })
-        cc_fits_df.to_csv(edit_path + ".csv", header=True, index=False)
-
-        # iMSD CSV for non-MEMFCS models that produced it
         if not is_memfcs:
             reIMSD_local = None
             aR     = res.get("PSF_aspect_ratio")
@@ -2363,7 +2557,8 @@ class ModularRICSGUI:
                     pass
             if reIMSD_local is not None:
                 iMSD_df = pd.DataFrame({"tau": tau, "iMSD": reIMSD_local})
-                iMSD_df.to_csv(edit_path + "_iMSD.csv", header=True, index=False)
+                iMSD_df.to_csv(edit_path + "_iMSD.csv",
+                               header=True, index=False)
 
         if write_summary:
             summary_csv = os.path.join(
@@ -2378,13 +2573,17 @@ class ModularRICSGUI:
                 row[k] = v[0] if (isinstance(v, list) and len(v) == 1) else v
             row["Filename"] = base_path
             df = pd.DataFrame([row])
-
             if not os.path.exists(summary_csv):
                 df.to_csv(summary_csv, header=True, index=False)
             else:
                 df.to_csv(summary_csv, mode="a", header=False, index=False)
 
-        self.log_message(f"Saved FCS outputs to: {os.path.dirname(edit_path)}")
+        if is_memfcs:
+            self._log_memfcs_interpretation(res)
+
+        self.log_message(
+            f"Saved FCS outputs to: {os.path.dirname(edit_path)}"
+        )
 
     def fcs_make_edit_path(self, base_path: str, fitting_model: str) -> str:
         # base_path is without ".csv"
@@ -2408,7 +2607,8 @@ class ModularRICSGUI:
                     self.progress_bar.grid_remove()
                     self.set_ui_busy(False)
                     return
-
+                elif msg_type == "file_error":
+                    self.log_message(payload)
                 elif msg_type == "file_done":
                     res = payload["res"] if isinstance(payload, dict) and "res" in payload else payload
                     self.log_message(f"Finished: {res.get('base_path')}")
@@ -2551,7 +2751,7 @@ class ModularRICSGUI:
         raw_traces = [np.asarray(x, dtype=float) for x in res["raw_traces"]]
         norm_traces = [np.asarray(x, dtype=float) for x in res["norm_traces"]]
 
-        # ── ctrl_idx may now be None ──
+        #  ctrl_idx may now be None 
         ctrl_idx = res.get("ctrl_idx")          # None in no-control mode
         no_control = res.get("no_control", False)
 
@@ -2583,7 +2783,7 @@ class ModularRICSGUI:
             ax.text(tb_s + T * 0.01, yl[1] * 0.98, 'bleach',
                     fontsize=7, color='#999999', va='top')
 
-        # ── Panel A: raw traces ──
+        #  Panel A: raw traces 
         _style(axA, 'Raw intensity (pre-normalisation)', 'Time [s]', 'Mean intensity [counts]')
 
         if ctrl_idx is not None:
@@ -2598,7 +2798,7 @@ class ModularRICSGUI:
         _vline(axA)
         axA.legend(fontsize=8, frameon=False)
 
-        # ── Panels B, C, D: unchanged — ctrl_idx not needed ──
+        #  Panels B, C, D: unchanged — ctrl_idx not needed 
         _style(axB, 'Normalised fit', 'Time [s]', 'Normalised intensity [counts]')
         xs = np.linspace(0, len(t_all) - 1, 1000)
         ts = xs * dt
@@ -2844,7 +3044,336 @@ class ModularRICSGUI:
             return
 
         self.root.after(50, self._poll_diffmap_queue)
-    
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------ICS GUI-------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
+    def create_ics_tab(self):
+        ics_frame = ttk.Frame(self.notebook)
+        self.notebook.add(ics_frame, text="ICS")
+
+        params_frame = ttk.LabelFrame(ics_frame, text="ICS Parameters", padding=10)
+        params_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        row = 0
+        #  single file 
+        ttk.Label(params_frame, text="Single TIFF:").grid(row=row, column=0, sticky="w")
+        self.ics_tiff = tk.StringVar()
+        e1 = ttk.Entry(params_frame, textvariable=self.ics_tiff, width=28)
+        e1.grid(row=row, column=1, sticky="ew")
+        b1 = ttk.Button(params_frame, text="Browse",
+                         command=self._browse_ics_tiff)
+        b1.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e1)
+        self.register_busy_widget(b1)
+
+        row += 1
+        #  batch folder 
+        ttk.Label(params_frame, text="Batch folder:").grid(row=row, column=0, sticky="w")
+        self.ics_folder = tk.StringVar()
+        e2 = ttk.Entry(params_frame, textvariable=self.ics_folder, width=28)
+        e2.grid(row=row, column=1, sticky="ew")
+        b2 = ttk.Button(params_frame, text="Browse",
+                         command=self._browse_ics_folder)
+        b2.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e2)
+        self.register_busy_widget(b2)
+
+        row += 1
+        ttk.Label(params_frame, text="File pattern:").grid(row=row, column=0, sticky="w")
+        self.ics_pattern = tk.StringVar(value="*.tiff")
+        ttk.Entry(params_frame, textvariable=self.ics_pattern,
+                  width=18).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6)
+
+        row += 1
+        ttk.Label(params_frame, text="Block length (frames):").grid(
+            row=row, column=0, sticky="w")
+        self.ics_block_length = tk.StringVar(value="10")
+        ttk.Entry(params_frame, textvariable=self.ics_block_length,
+                  width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Frame skip (lag τ):").grid(
+            row=row, column=0, sticky="w")
+        self.ics_frame_skip = tk.StringVar(value="1")
+        ttk.Entry(params_frame, textvariable=self.ics_frame_skip,
+                  width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Bin frames:").grid(
+            row=row, column=0, sticky="w")
+        self.ics_bin_frames = tk.StringVar(value="1")
+        ttk.Entry(params_frame, textvariable=self.ics_bin_frames,
+                  width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Threshold multiplier:").grid(
+            row=row, column=0, sticky="w")
+        self.ics_threshold_mult = tk.StringVar(value="0.1")
+        ttk.Entry(params_frame, textvariable=self.ics_threshold_mult,
+                  width=10).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        self.ics_save_block_images = tk.BooleanVar(value=True)
+        ttk.Checkbutton(params_frame,
+                         text="Save block images (MIP / mean / mask / G map)",
+                         variable=self.ics_save_block_images).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6)
+
+        row += 1
+        btn_frame = ttk.Frame(params_frame)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+
+        self.ics_run_btn = ttk.Button(btn_frame, text="Run ICS",
+                                       command=self._run_ics)
+        self.ics_run_btn.pack(side=tk.LEFT, padx=5)
+        self.register_busy_widget(self.ics_run_btn)
+
+        #  right-side display 
+        display_frame = ttk.LabelFrame(ics_frame, text="ICS Display", padding=10)
+        display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
+                           padx=5, pady=5)
+
+        self.ics_fig = Figure(figsize=(9, 7), dpi=100, facecolor="white")
+        self.ics_canvas = FigureCanvasTkAgg(self.ics_fig, display_frame)
+        self.ics_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(self.ics_canvas, display_frame)
+        toolbar.update()
+
+    #  browse helpers 
+    def _browse_ics_tiff(self):
+        fn = filedialog.askopenfilename(
+            title="Select TIFF file",
+            filetypes=[("TIFF files", "*.tif *.tiff"), ("All files", "*.*")]
+        )
+        if fn:
+            self.ics_tiff.set(fn)
+
+    def _browse_ics_folder(self):
+        folder = filedialog.askdirectory(title="Select ICS batch folder")
+        if folder:
+            self.ics_folder.set(folder)
+
+    #  run 
+    def _run_ics(self):
+        if self._is_worker_running("ics_proc"):
+            messagebox.showwarning("Warning", "ICS is already running.")
+            return
+
+        tiff_path = self.ics_tiff.get().strip()
+        folder    = self.ics_folder.get().strip()
+
+        if not tiff_path and not folder:
+            messagebox.showwarning("Warning",
+                                   "Select a single TIFF or a batch folder.")
+            return
+
+        mode = "single" if tiff_path else "batch"
+
+        config = {
+            "block_length":            self._safe_int(
+                                           self.ics_block_length,
+                                           "Block length", 10),
+            "frame_skip":              self._safe_int(
+                                           self.ics_frame_skip,
+                                           "Frame skip", 1),
+            "bin_frames":              self._safe_int(
+                                           self.ics_bin_frames,
+                                           "Bin frames", 1),
+            "threshold_multiplication": self._safe_float(
+                                           self.ics_threshold_mult,
+                                           "Threshold multiplier", 0.1),
+            "save_block_images":       bool(self.ics_save_block_images.get()),
+            "pattern":                 self.ics_pattern.get().strip(),
+        }
+
+        self.log_message(f"Starting ICS ({mode})...")
+        self.status_var.set("Running ICS...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        self.ics_queue        = multiprocessing.Queue()
+        self.ics_cancel_event = multiprocessing.Event()
+
+        params = {"mode": mode, "config": config}
+        if mode == "single":
+            params["tiff_path"] = tiff_path
+        else:
+            params["folder"] = folder
+
+        self.ics_proc = multiprocessing.Process(
+            target=ics_process_main,
+            args=(params, self.ics_queue, self.ics_cancel_event),
+            daemon=False,
+        )
+        self.ics_proc.start()
+        self._poll_ics_queue()
+
+    #  display 
+    def _update_ics_display(self, res: dict):
+        """
+        Draw the 2×2 overview for the most recently completed TIFF.
+        Works for both single and batch (shows last processed file).
+        """
+        self.ics_fig.clear()
+        gs = gridspec.GridSpec(2, 2, figure=self.ics_fig,
+                               hspace=0.35, wspace=0.3)
+
+        df          = res.get("blocks_df")
+        mean_stack  = res.get("mean_stack")
+        G_stack     = res.get("G_stack")
+        stem        = res.get("stem", "")
+
+        self.ics_fig.suptitle(f"ICS — {stem}", fontsize=11,
+                              fontweight="bold")
+
+        #  top-left: mean G with SD error bars 
+        ax00 = self.ics_fig.add_subplot(gs[0, 0])
+        if df is not None and "mean_G" in df.columns:
+            ax00.errorbar(df.index, df["mean_G"],
+                          yerr=df["sd_G"],
+                          marker="o", capsize=4,
+                          color="steelblue", linewidth=1.5)
+        ax00.set_xlabel("Block number")
+        ax00.set_ylabel("Mean G")
+        ax00.set_title("ICS correlation vs time")
+        ax00.spines[["top", "right"]].set_visible(False)
+        ax00.grid(True, alpha=0.3)
+
+        #  top-right: normalised G 
+        ax01 = self.ics_fig.add_subplot(gs[0, 1])
+        if df is not None and "Normalized" in df.columns:
+            ax01.plot(df.index, df["Normalized"],
+                      marker="o", color="seagreen", linewidth=1.5)
+            ax01.axhline(1.0, color="grey", linestyle="--", linewidth=0.8)
+        ax01.set_xlabel("Block number")
+        ax01.set_ylabel("Normalised G")
+        ax01.set_title("Normalised correlation")
+        ax01.spines[["top", "right"]].set_visible(False)
+        ax01.grid(True, alpha=0.3)
+
+        #  bottom-left: mean intensity of last block 
+        ax10 = self.ics_fig.add_subplot(gs[1, 0])
+        if mean_stack is not None and len(mean_stack) > 0:
+            im = ax10.imshow(mean_stack[-1], cmap="gray")
+            self.ics_fig.colorbar(im, ax=ax10, fraction=0.046, pad=0.04)
+        ax10.set_title("Mean intensity (last block)")
+        ax10.axis("off")
+
+        #  bottom-right: G map of last block 
+        ax11 = self.ics_fig.add_subplot(gs[1, 1])
+        if G_stack is not None and len(G_stack) > 0:
+            vmax = float(np.nanpercentile(G_stack[-1], 99))
+            im = ax11.imshow(G_stack[-1], cmap="hot",
+                             vmin=0, vmax=max(vmax, 1e-12))
+            self.ics_fig.colorbar(im, ax=ax11, fraction=0.046, pad=0.04)
+        ax11.set_title("G map (last block)")
+        ax11.axis("off")
+
+        self.ics_canvas.draw()
+
+    #  queue polling 
+    def _poll_ics_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.ics_queue.get_nowait()
+
+                if msg_type == "progress":
+                    self.set_ui_busy(True)
+                    self.progress_var.set(float(payload))
+
+                elif msg_type == "block_done":
+                    # lightweight log — no redraw for every block
+                    info = payload
+                    self.log_message(
+                        f"  {info['stem']} — block "
+                        f"{info['block']+1}/{info['n_blocks']}  "
+                        f"mean G = {info['stats']['mean_G']:.4f}"
+                        if np.isfinite(info['stats']['mean_G'])
+                        else f"  {info['stem']} — block "
+                             f"{info['block']+1}/{info['n_blocks']}  "
+                             f"mean G = NaN (empty mask)"
+                    )
+
+                elif msg_type == "file_done":
+                    # update the plot for the most recently finished file
+                    self._update_ics_display(payload)
+                    self.log_message(
+                        f"Finished: {payload.get('stem')}  "
+                        f"({payload.get('n_blocks')} blocks)  "
+                        f"CSV: {payload.get('csv_path')}"
+                    )
+
+                elif msg_type == "error_file":
+                    self.log_message(f"FAILED: {payload}")
+
+                elif msg_type == "done":
+                    # single-file: payload is the result dict
+                    # batch: payload is the summary dict
+                    if "blocks_df" in payload:
+                        # single file result
+                        self._update_ics_display(payload)
+                        self.log_message(
+                            f"ICS complete — {payload.get('n_blocks')} blocks  "
+                            f"SVG: {payload.get('svg_path')}"
+                        )
+                    else:
+                        # batch summary
+                        n_ok     = payload.get("n_ok", 0)
+                        n_failed = payload.get("n_failed", 0)
+                        self.log_message(
+                            f"ICS batch complete — "
+                            f"{n_ok} succeeded, {n_failed} failed"
+                        )
+                        if payload.get("combined_csv"):
+                            self.log_message(
+                                f"Global CSV: {payload['combined_csv']}"
+                            )
+                        if payload.get("combined_fig"):
+                            self.log_message(
+                                f"Global plot: {payload['combined_fig']}"
+                            )
+
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    self.log_message("ICS done.")
+                    return
+
+                elif msg_type == "cancelled":
+                    self.log_message("ICS cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "error":
+                    self.log_message(payload)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    messagebox.showerror("ICS Error",
+                                         "ICS failed. See log.")
+                    return
+
+        except queue.Empty:
+            pass
+
+        if self.ics_proc is not None and not self.ics_proc.is_alive():
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("ICS worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_ics_queue)
     # -----------------------------------------------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------- Vesicle Finder GUI ------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -3062,7 +3591,7 @@ class ModularRICSGUI:
         ttk.Separator(params_frame, orient="horizontal").grid(row=row, column=0, columnspan=3, sticky="ew", pady=10)
 
         row += 1
-        ttk.Label(params_frame, text="── Membrane Straightening ──", font=("", 10, "bold")).grid(
+        ttk.Label(params_frame, text=" Membrane Straightening ", font=("", 10, "bold")).grid(
             row=row, column=0, columnspan=3, sticky="w"
         )
 
@@ -3550,7 +4079,7 @@ class ModularRICSGUI:
             # y-axis for thickness in µm
             y_um = np.linspace(-thickness_um / 2, thickness_um / 2, strips.shape[1])
 
-            # ── Panel 1: straightened strip (frame 0) ──
+            #  Panel 1: straightened strip (frame 0) 
             ax1 = self.vesicle_fig.add_subplot(gs[0, vi])
             im1 = ax1.imshow(
                 strips[0],
@@ -3565,7 +4094,7 @@ class ModularRICSGUI:
             self.vesicle_fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
             # ax1.set_rasterized(True)   # ← fix for SVG blank panel
 
-            # ── Panel 2: heatmap (time vs angle) ──
+            #  Panel 2: heatmap (time vs angle) 
             ax2 = self.vesicle_fig.add_subplot(gs[1, vi])
 
             if n_frames > 1:
@@ -3589,7 +4118,7 @@ class ModularRICSGUI:
                 ax2.set_title(f"Vesicle {lbl} — membrane profile (single frame)", fontsize=9)
                 ax2.grid(True, alpha=0.3)
 
-            # ── Panel 3: total intensity vs time ──
+            #  Panel 3: total intensity vs time 
             ax3 = self.vesicle_fig.add_subplot(gs[2, vi])
 
             if n_frames > 1:
@@ -3614,6 +4143,835 @@ class ModularRICSGUI:
         svg_path = os.path.join(out_dir, "straighten_overview.svg")
         self.vesicle_fig.savefig(svg_path, dpi=300, bbox_inches="tight", facecolor="white")
         self.log_message(f"Saved overview SVG: {svg_path}")
+
+
+    # -----------------------------------------------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------- Vesicle Finder GUI ------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------------------------------------------------------------------
+    def create_afm_tab(self):
+        afm_frame = ttk.Frame(self.notebook)
+        self.notebook.add(afm_frame, text="AFM")
+
+        #  left panel: parameters 
+        params_frame = ttk.LabelFrame(
+            afm_frame, text="AFM Parameters", padding=10
+        )
+        params_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        row = 0
+        ttk.Label(params_frame, text="JPK file:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_filepath = tk.StringVar()
+        e1 = ttk.Entry(params_frame, textvariable=self.afm_filepath, width=28)
+        e1.grid(row=row, column=1, sticky="ew")
+        b1 = ttk.Button(params_frame, text="Browse",
+                        command=self._browse_afm_file)
+        b1.grid(row=row, column=2, padx=5)
+        self.register_busy_widget(e1)
+        self.register_busy_widget(b1)
+
+        row += 1
+        ttk.Label(params_frame, text="Channel:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_channel = tk.StringVar(value="height_trace")
+        ttk.Combobox(
+            params_frame, textvariable=self.afm_channel,
+            values=["height_trace", "height_retrace",
+                    "adhesion_force_trace", "stiffness_trace"],
+            width=20
+        ).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        load_btn = ttk.Button(
+            params_frame, text="Load File",
+            command=self._afm_load_file
+        )
+        load_btn.grid(row=row, column=0, columnspan=2,
+                      pady=6, sticky="ew")
+        self.register_busy_widget(load_btn)
+
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        #  profile parameters 
+        row += 1
+        ttk.Label(params_frame,
+                  text=" Profile parameters ",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w"
+        )
+
+        row += 1
+        ttk.Label(params_frame, text="Fit points:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_n_fit_points = tk.IntVar(value=15)
+        fit_scale = ttk.Scale(
+            params_frame,
+            from_=3, to=60,
+            variable=self.afm_n_fit_points,
+            orient="horizontal",
+            command=self._afm_on_fit_points_changed,
+        )
+        fit_scale.grid(row=row, column=1, sticky="ew")
+        self.afm_fit_points_label = ttk.Label(params_frame, text="15")
+        self.afm_fit_points_label.grid(row=row, column=2, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Smooth window:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_smooth_window = tk.StringVar(value="15")
+        ttk.Entry(params_frame, textvariable=self.afm_smooth_window,
+                  width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Smooth poly order:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_smooth_poly = tk.StringVar(value="3")
+        ttk.Entry(params_frame, textvariable=self.afm_smooth_poly,
+                  width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Profile points:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_n_points = tk.StringVar(value="300")
+        ttk.Entry(params_frame, textvariable=self.afm_n_points,
+                  width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame,
+                  text="Threshold fraction (0-1):").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.afm_threshold_frac = tk.StringVar(value="0.05")
+        ttk.Entry(params_frame, textvariable=self.afm_threshold_frac,
+                  width=8).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        #  instructions 
+        row += 1
+        instructions = (
+            "How to draw a profile:\n"
+            "1. Click START on bare membrane\n"
+            "2. Click END   on bare membrane\n"
+            "   (line must cross the condensate)\n\n"
+            "The two clicked heights define the\n"
+            "linear baseline (membrane plane)."
+        )
+        ttk.Label(params_frame, text=instructions,
+                  justify="left",
+                  foreground="gray").grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=4
+        )
+
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        #  action buttons 
+        row += 1
+        btn_row = ttk.Frame(params_frame)
+        btn_row.grid(row=row, column=0, columnspan=3, pady=4)
+
+        self.afm_reset_btn = ttk.Button(
+            btn_row, text="Reset last",
+            command=self._afm_reset_last,
+            state="disabled"
+        )
+        self.afm_reset_btn.pack(side=tk.LEFT, padx=3)
+
+        self.afm_clear_btn = ttk.Button(
+            btn_row, text="Clear all",
+            command=self._afm_clear_all,
+            state="disabled"
+        )
+        self.afm_clear_btn.pack(side=tk.LEFT, padx=3)
+
+        self.afm_save_btn = ttk.Button(
+            btn_row, text="Save results",
+            command=self._afm_save_results,
+            state="disabled"
+        )
+        self.afm_save_btn.pack(side=tk.LEFT, padx=3)
+
+        #  results table 
+        row += 1
+        ttk.Label(params_frame,
+                  text="Profiles (click to highlight):",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=3, sticky="w"
+        )
+
+        row += 1
+        self.afm_profile_listbox = tk.Listbox(
+            params_frame, height=8, width=38,
+            selectmode=tk.SINGLE
+        )
+        self.afm_profile_listbox.grid(
+            row=row, column=0, columnspan=3, sticky="ew"
+        )
+        self.afm_profile_listbox.bind(
+            "<<ListboxSelect>>", self._afm_on_listbox_select
+        )
+
+        #  right panel: figure 
+        display_frame = ttk.LabelFrame(
+            afm_frame, text="AFM Display", padding=5
+        )
+        display_frame.pack(
+            side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5
+        )
+
+        self.afm_fig = Figure(figsize=(11, 7), dpi=100,
+                              facecolor="white")
+        self.afm_canvas = FigureCanvasTkAgg(self.afm_fig, display_frame)
+        self.afm_canvas.get_tk_widget().pack(
+            fill=tk.BOTH, expand=True
+        )
+        toolbar = NavigationToolbar2Tk(self.afm_canvas, display_frame)
+        toolbar.update()
+
+        # bind click on the AFM image axes
+        self.afm_canvas.mpl_connect(
+            "button_press_event", self._afm_on_canvas_click
+        )
+
+        #  internal state 
+        self._afm_height_nm    = None    # loaded ndarray
+        self._afm_pixel_size   = None    # nm/px
+        self._afm_scan_size_um = None
+        self._afm_click_points = []      # accumulates (x_px, y_px, h_nm)
+        self._afm_profiles     = []      # list of result dicts
+        self._afm_ax_image     = None    # axes reference
+        self._afm_ax_profile   = None
+        self._afm_colorbar     = None
+
+        self._afm_draw_empty()
+
+    # 
+    # Browse / load
+    # 
+
+    def _browse_afm_file(self):
+        fn = filedialog.askopenfilename(
+            title="Select JPK file",
+            filetypes=[
+                ("JPK QI image", "*.jpk-qi-image"),
+                ("JPK image",    "*.jpk"),
+                ("All files",    "*.*"),
+            ]
+        )
+        if fn:
+            self.afm_filepath.set(fn)
+
+    def _afm_load_file(self):
+        fp = self.afm_filepath.get().strip()
+        if not fp:
+            messagebox.showwarning("Warning", "Please select a JPK file.")
+            return
+
+        if self._is_worker_running("afm_proc"):
+            messagebox.showwarning("Warning", "AFM worker is already running.")
+            return
+
+        self.log_message(f"Loading AFM file: {fp}")
+        self.status_var.set("Loading AFM file...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        self.afm_queue        = multiprocessing.Queue()
+        self.afm_cancel_event = multiprocessing.Event()
+
+        self.afm_proc = multiprocessing.Process(
+            target=afm_worker_main,
+            args=(
+                {"task": "load",
+                 "filepath": fp,
+                 "channel":  self.afm_channel.get()},
+                self.afm_queue,
+                self.afm_cancel_event,
+            ),
+            daemon=False,
+        )
+        self.afm_proc.start()
+        self._poll_afm_queue()
+
+    # 
+    # Canvas interaction
+    # 
+
+    def _afm_on_canvas_click(self, event):
+        """Handle mouse click on the AFM image axes."""
+        if self._afm_height_nm is None:
+            return
+        if event.inaxes is not self._afm_ax_image:
+            return
+        if event.button != 1:
+            return
+
+        scan = self._afm_scan_size_um
+        ny, nx = self._afm_height_nm.shape
+
+        x_px = float(np.clip(
+            event.xdata / scan * nx, 0, nx - 1
+        ))
+        y_px = float(np.clip(
+            event.ydata / scan * ny, 0, ny - 1
+        ))
+
+        # sample height at click
+        from scipy import ndimage as _ndi
+        h_nm = float(_ndi.map_coordinates(
+            self._afm_height_nm, [[y_px], [x_px]], order=1
+        )[0])
+
+        self._afm_click_points.append((x_px, y_px, h_nm))
+
+        # draw marker on image
+        self._afm_ax_image.plot(
+            event.xdata, event.ydata,
+            "+", color="cyan", markersize=14, markeredgewidth=2,
+            zorder=10
+        )
+        self.afm_canvas.draw_idle()
+
+        self.log_message(
+            f"  Click {len(self._afm_click_points)}: "
+            f"x={x_px:.1f}px  y={y_px:.1f}px  h={h_nm:.2f} nm"
+        )
+
+        if len(self._afm_click_points) == 2:
+            self._afm_compute_profile()
+            self._afm_click_points = []
+
+    # 
+    # Profile computation
+    # 
+
+    def _afm_compute_profile(self):
+        (x0, y0, h0), (x1, y1, h1) = self._afm_click_points
+
+        if self._is_worker_running("afm_proc"):
+            messagebox.showwarning("Warning", "AFM worker is busy.")
+            return
+
+        params = {
+            "task":         "profile",
+            "height_nm":    self._afm_height_nm,
+            "pixel_size_nm": self._afm_pixel_size,
+            "start_px":     (x0, y0),
+            "end_px":       (x1, y1),
+            "h_start_nm":   h0,
+            "h_end_nm":     h1,
+            "n_fit_points": int(self.afm_n_fit_points.get()),
+            "smooth_window": self._safe_int(
+                self.afm_smooth_window, "Smooth window", 15
+            ),
+            "smooth_poly":  self._safe_int(
+                self.afm_smooth_poly, "Smooth poly", 3
+            ),
+            "n_points":     self._safe_int(
+                self.afm_n_points, "Profile points", 300
+            ),
+            "threshold_fraction": self._safe_float(
+                self.afm_threshold_frac, "Threshold fraction", 0.05
+            ),
+        }
+
+        self.status_var.set("Computing profile...")
+        self.afm_queue        = multiprocessing.Queue()
+        self.afm_cancel_event = multiprocessing.Event()
+
+        self.afm_proc = multiprocessing.Process(
+            target=afm_worker_main,
+            args=(params, self.afm_queue, self.afm_cancel_event),
+            daemon=False,
+        )
+        self.afm_proc.start()
+        self._poll_afm_queue()
+
+    # 
+    # Fit-points slider callback
+    # 
+
+    def _afm_on_fit_points_changed(self, _val):
+        nfp = int(self.afm_n_fit_points.get())
+        self.afm_fit_points_label.configure(text=str(nfp))
+
+        if not self._afm_profiles:
+            return
+
+        idx = len(self._afm_profiles) - 1
+        sel = self.afm_profile_listbox.curselection()
+        if sel:
+            idx = int(sel[0])
+
+        last = self._afm_profiles[idx]
+
+        if self._is_worker_running("afm_proc"):
+            return
+
+        params = {
+            "task":          "refit_angles",
+            "distances_nm":  last["distances_nm"],
+            "h_adj":         last["h_adj"],
+            "n_fit_points":  nfp,
+            "threshold_fraction": self._safe_float(
+                self.afm_threshold_frac, "Threshold fraction", 0.05
+            ),
+            "profile_idx":   idx,
+        }
+
+        self.afm_queue        = multiprocessing.Queue()
+        self.afm_cancel_event = multiprocessing.Event()
+
+        self.afm_proc = multiprocessing.Process(
+            target=afm_worker_main,
+            args=(params, self.afm_queue, self.afm_cancel_event),
+            daemon=False,
+        )
+        self.afm_proc.start()
+        self._poll_afm_queue()
+
+    # 
+    # Drawing helpers
+    # 
+
+    def _afm_draw_empty(self):
+        self.afm_fig.clear()
+        gs = gridspec.GridSpec(
+            1, 2, figure=self.afm_fig,
+            width_ratios=[1, 1], wspace=0.3
+        )
+        self._afm_ax_image   = self.afm_fig.add_subplot(gs[0, 0])
+        self._afm_ax_profile = self.afm_fig.add_subplot(gs[0, 1])
+
+        self._afm_ax_image.set_title("AFM height image")
+        self._afm_ax_image.text(
+            0.5, 0.5, "Load a JPK file to begin",
+            ha="center", va="center",
+            transform=self._afm_ax_image.transAxes,
+            color="gray", fontsize=11
+        )
+
+        self._afm_ax_profile.set_title("Line profile")
+        self._afm_ax_profile.text(
+            0.5, 0.5,
+            "Click two points on the\nAFM image to draw a profile",
+            ha="center", va="center",
+            transform=self._afm_ax_profile.transAxes,
+            color="gray", fontsize=11
+        )
+        self.afm_canvas.draw_idle()
+
+    def _afm_draw_image(self):
+        """Redraw only the AFM image panel — removes old colorbar first."""
+        ax = self._afm_ax_image
+
+        # ── remove any existing colorbar axes ──────────────────
+        # matplotlib attaches the colorbar to a stored attribute
+        # if we set it ourselves; remove it before clearing
+        if hasattr(self, "_afm_colorbar") and self._afm_colorbar is not None:
+            try:
+                self._afm_colorbar.remove()
+            except Exception:
+                pass
+            self._afm_colorbar = None
+
+        ax.cla()
+
+        im = ax.imshow(
+            self._afm_height_nm,
+            cmap="afmhot", aspect="equal",
+            extent=[
+                0, self._afm_scan_size_um,
+                self._afm_scan_size_um, 0
+            ],
+            interpolation="bilinear",
+        )
+
+        # store the colorbar so we can remove it next time
+        self._afm_colorbar = self.afm_fig.colorbar(
+            im, ax=ax, fraction=0.046, pad=0.04, label="Height (nm)"
+        )
+
+        ax.set_xlabel("x (µm)")
+        ax.set_ylabel("y (µm)")
+        ax.set_title("AFM height image — click to draw profile")
+
+        # draw all existing profile lines
+        s  = self._afm_scan_size_um
+        ny, nx = self._afm_height_nm.shape
+
+        for i, prof in enumerate(self._afm_profiles):
+            x0, y0 = prof["start_px"]
+            x1, y1 = prof["end_px"]
+            ax.plot(
+                [x0 * s / nx, x1 * s / nx],
+                [y0 * s / ny, y1 * s / ny],
+                "c-", linewidth=1.8, zorder=5
+            )
+            mx = (x0 + x1) / 2 * s / nx
+            my = (y0 + y1) / 2 * s / ny
+            ax.text(
+                mx, my, str(i + 1),
+                color="cyan", fontsize=8,
+                ha="center", va="center",
+                fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.15",
+                          fc="black", alpha=0.5)
+            )
+
+        self.afm_canvas.draw_idle()
+
+    def _afm_draw_profile(self, prof: dict):
+        """Draw the profile panel for one result dict."""
+        ax = self._afm_ax_profile
+        ax.cla()
+
+        dist     = np.asarray(prof["distances_nm"])
+        raw      = np.asarray(prof["heights_raw"])
+        baseline = np.asarray(prof["baseline"])
+        h_adj    = np.asarray(prof["h_adj"])
+        angles   = prof.get("angles")
+        nfp      = prof.get("n_fit_points", 15)
+        n        = len(dist)
+
+        # raw
+        ax.plot(dist, raw,
+                color="steelblue", linewidth=1.5, alpha=0.4,
+                label="Raw")
+
+        # baseline
+        ax.plot(dist, baseline,
+                color="saddlebrown", linewidth=2, linestyle="--",
+                label=(f"Baseline  "
+                       f"({prof['h_start_nm']:.1f}→"
+                       f"{prof['h_end_nm']:.1f} nm)"))
+
+        # corrected
+        ax.plot(dist, h_adj,
+                color="royalblue", linewidth=2,
+                label="Corrected (membrane = 0)")
+        ax.fill_between(dist, 0, h_adj,
+                        where=(h_adj > 0),
+                        alpha=0.15, color="royalblue")
+
+        # membrane reference
+        ax.axhline(0, color="saddlebrown", linewidth=1,
+                   linestyle="-", alpha=0.4)
+
+        # contact points and tangent lines
+        if angles is not None:
+            for side, ck, sk, tk, color, direction in [
+                ("left",  "left_contact",  "left_slope",
+                 "theta_left_deg",  "tomato",         +1),
+                ("right", "right_contact", "right_slope",
+                 "theta_right_deg", "mediumseagreen", -1),
+            ]:
+                if ck not in angles or sk not in angles:
+                    continue
+
+                ci    = angles[ck]
+                x_c   = float(dist[ci])
+                slope = float(angles[sk])
+                theta = angles.get(tk, float("nan"))
+
+                # contact marker at membrane level
+                ax.plot(x_c, 0, "o",
+                        color=color, markersize=10, zorder=6,
+                        label=f"{side.capitalize()} θ = {theta:.1f}°")
+
+                # points used for slope
+                fit_idx = np.arange(
+                    ci, ci + direction * nfp, direction
+                )
+                fit_idx = fit_idx[
+                    (fit_idx >= 0) & (fit_idx < n)
+                ]
+                ax.plot(dist[fit_idx], h_adj[fit_idx],
+                        "o", color=color, markersize=5,
+                        alpha=0.9, zorder=5)
+
+                # tangent line
+                span  = float(dist[-1]) * 0.25
+                x_ext = np.array([x_c - span, x_c + span])
+                y_ext = slope * (x_ext - x_c)
+                ax.plot(x_ext, y_ext, "--",
+                        color=color, linewidth=2)
+
+            tl = angles.get("theta_left_deg",  float("nan"))
+            tr = angles.get("theta_right_deg", float("nan"))
+            tm = angles.get("theta_mean_deg",  float("nan"))
+            title = (f"θ_left={tl:.1f}°  |  "
+                     f"θ_right={tr:.1f}°  |  "
+                     f"θ_mean={tm:.1f}°")
+        else:
+            title = (
+                f"Contact points not found — "
+                f"ensure line crosses condensate fully  "
+                f"(peak = {h_adj.max():.2f} nm)"
+            )
+
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("Distance (nm)")
+        ax.set_ylabel("Height (nm)")
+        ax.legend(fontsize=9, loc="upper right")
+        ax.grid(True, alpha=0.3)
+        self.afm_canvas.draw_idle()
+
+    # 
+    # Listbox
+    # 
+
+    def _afm_rebuild_listbox(self):
+        self.afm_profile_listbox.delete(0, tk.END)
+        for i, prof in enumerate(self._afm_profiles):
+            m = prof.get("measurements", {})
+            angles = prof.get("angles") or {}
+            th_m = angles.get("theta_mean_deg", float("nan"))
+            ph   = m.get("peak_height_nm", float("nan"))
+            fw   = m.get("fwhm_nm",        float("nan"))
+            self.afm_profile_listbox.insert(
+                tk.END,
+                f"#{i+1}  h={ph:.1f}nm  "
+                f"FWHM={fw:.0f}nm  "
+                f"θ={th_m:.1f}°"
+            )
+
+    def _afm_on_listbox_select(self, _event):
+        sel = self.afm_profile_listbox.curselection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx < len(self._afm_profiles):
+            self._afm_draw_profile(self._afm_profiles[idx])
+
+    # 
+    # Button callbacks
+    # 
+
+    def _afm_reset_last(self):
+        if self._afm_profiles:
+            self._afm_profiles.pop()
+        self._afm_click_points = []
+        self._afm_rebuild_listbox()
+        self._afm_draw_image()
+        if self._afm_profiles:
+            self._afm_draw_profile(self._afm_profiles[-1])
+        else:
+            self._afm_ax_profile.cla()
+            self.afm_canvas.draw_idle()
+        if not self._afm_profiles:
+            self.afm_reset_btn.configure(state="disabled")
+            self.afm_clear_btn.configure(state="disabled")
+            self.afm_save_btn.configure(state="disabled")
+
+    def _afm_clear_all(self):
+        self._afm_profiles.clear()
+        self._afm_click_points = []
+        self._afm_rebuild_listbox()
+        self._afm_draw_image()
+        self._afm_ax_profile.cla()
+        self.afm_canvas.draw_idle()
+        self.afm_reset_btn.configure(state="disabled")
+        self.afm_clear_btn.configure(state="disabled")
+        self.afm_save_btn.configure(state="disabled")
+
+    def _afm_save_results(self):
+        if not self._afm_profiles:
+            messagebox.showwarning("Warning", "No profiles to save.")
+            return
+
+        fp = self.afm_filepath.get().strip()
+        default_dir  = str(Path(fp).parent) if fp else "."
+        default_stem = Path(fp).stem        if fp else "afm"
+
+        save_dir = filedialog.askdirectory(
+            title="Select folder to save AFM results",
+            initialdir=default_dir,
+        )
+        if not save_dir:
+            return
+
+        import pandas as pd
+        rows = []
+        for i, prof in enumerate(self._afm_profiles):
+            m      = prof.get("measurements", {})
+            angles = prof.get("angles") or {}
+            row    = {"Profile": i + 1}
+            row.update(m)
+            row["start_px_x"] = prof["start_px"][0]
+            row["start_px_y"] = prof["start_px"][1]
+            row["end_px_x"]   = prof["end_px"][0]
+            row["end_px_y"]   = prof["end_px"][1]
+            rows.append(row)
+
+            # per-profile CSV with full arrays
+            prof_csv = os.path.join(
+                save_dir, f"{default_stem}_profile{i+1}.csv"
+            )
+            pd.DataFrame({
+                "distance_nm": prof["distances_nm"],
+                "height_raw_nm": prof["heights_raw"],
+                "height_smoothed_nm": prof["h_smooth"],
+                "baseline_nm": prof["baseline"],
+                "height_corrected_nm": prof["h_adj"],
+            }).to_csv(prof_csv, index=False)
+
+        # summary CSV
+        summary_csv = os.path.join(
+            save_dir, f"{default_stem}_AFM_summary.csv"
+        )
+        pd.DataFrame(rows).to_csv(summary_csv, index=False)
+
+        # save current figure as SVG
+        svg_path = os.path.join(
+            save_dir, f"{default_stem}_AFM_overview.svg"
+        )
+        self.afm_fig.savefig(
+            svg_path, dpi=300,
+            bbox_inches="tight", facecolor="white"
+        )
+
+        self.log_message(
+            f"AFM results saved to {save_dir}  "
+            f"({len(self._afm_profiles)} profiles)"
+        )
+        self.log_message(f"  Summary: {summary_csv}")
+        self.log_message(f"  Figure:  {svg_path}")
+
+    # 
+    # Queue polling
+    # 
+
+    def _poll_afm_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.afm_queue.get_nowait()
+
+                if msg_type == "loaded":
+                    self._afm_height_nm    = payload["height_nm"]
+                    self._afm_pixel_size   = payload["pixel_size_nm"]
+                    info = payload["info"]
+                    self._afm_scan_size_um = info["scan_size_um"]
+
+                    self.log_message(
+                        f"AFM loaded: {payload['filepath']}"
+                    )
+                    self.log_message(
+                        f"  Shape={info['shape']}  "
+                        f"px={info['pixel_size_nm']:.3f} nm  "
+                        f"scan={info['scan_size_um']:.3f} µm"
+                    )
+                    self.log_message(
+                        f"  Heights: "
+                        f"{info['height_min_nm']:.2f} – "
+                        f"{info['height_max_nm']:.2f} nm"
+                    )
+
+                    # rebuild the two-panel figure
+                    self.afm_fig.clear()
+                    gs = gridspec.GridSpec(
+                        1, 2, figure=self.afm_fig,
+                        width_ratios=[1, 1], wspace=0.3
+                    )
+                    self._afm_ax_image   = self.afm_fig.add_subplot(
+                        gs[0, 0]
+                    )
+                    self._afm_ax_profile = self.afm_fig.add_subplot(
+                        gs[0, 1]
+                    )
+                    self._afm_draw_image()
+
+                    self.status_var.set("Ready — click image to draw profile")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "profile":
+                    self._afm_profiles.append(payload)
+                    self._afm_rebuild_listbox()
+                    self._afm_draw_image()
+                    self._afm_draw_profile(payload)
+
+                    m = payload.get("measurements", {})
+                    self.log_message(
+                        f"Profile #{len(self._afm_profiles)}  "
+                        f"h={m.get('peak_height_nm', float('nan')):.2f} nm  "
+                        f"FWHM={m.get('fwhm_nm', float('nan')):.1f} nm  "
+                        f"θ_mean={m.get('theta_mean_deg', float('nan')):.1f}°"
+                    )
+
+                    self.afm_reset_btn.configure(state="normal")
+                    self.afm_clear_btn.configure(state="normal")
+                    self.afm_save_btn.configure(state="normal")
+
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "refit_done":
+                    idx  = payload.get("profile_idx", -1)
+                    if 0 <= idx < len(self._afm_profiles):
+                        self._afm_profiles[idx]["angles"]       = (
+                            payload["angles"]
+                        )
+                        self._afm_profiles[idx]["measurements"] = (
+                            payload["measurements"]
+                        )
+                        self._afm_profiles[idx]["n_fit_points"] = (
+                            payload["n_fit_points"]
+                        )
+                        self._afm_rebuild_listbox()
+                        self._afm_draw_profile(self._afm_profiles[idx])
+
+                    self.status_var.set("Ready")
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "cancelled":
+                    self.log_message("AFM cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "error":
+                    self.log_message(payload)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    messagebox.showerror(
+                        "AFM Error", "AFM processing failed. See log."
+                    )
+                    return
+
+        except queue.Empty:
+            pass
+
+        if (self.afm_proc is not None
+                and not self.afm_proc.is_alive()):
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("AFM worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_afm_queue)
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------`Results tab GUI-------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
@@ -3808,6 +5166,8 @@ class ModularRICSGUI:
             "fcsfit_cancel_event",
             "frap_cancel_event",
             "vesicle_cancel_event",
+            "ics_cancel_event",
+            "afm_cancel_event",
 
         ):
             ev = getattr(self, ev_attr, None)
@@ -3839,11 +5199,11 @@ class ModularRICSGUI:
                 setattr(self, proc_attr, None)
 
         # 2–3) Stop any known worker processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc",):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc",):
             _stop_proc(proc_attr)
 
         # 4) Close queues properly (prevents resource_tracker semaphore warnings)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue",):
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue","afm_queue",):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
@@ -3864,6 +5224,7 @@ class ModularRICSGUI:
             "fcsfit_cancel_event",
             "frap_cancel_event",
             "vesicle_cancel_event",
+            "afm_cancel_event",
         ):
             setattr(self, ev_attr, None)
 
@@ -3912,7 +5273,7 @@ class ModularRICSGUI:
     
     def _cleanup_mp(self):
         # terminate running processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc"):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc",):
             p = getattr(self, proc_attr, None)
             try:
                 if p is not None and p.is_alive():
@@ -3923,7 +5284,7 @@ class ModularRICSGUI:
             setattr(self, proc_attr, None)
 
         # close queues properly
-        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue"):
+        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue", "afm_queue",):
             q = getattr(self, q_attr, None)
             try:
                 if q is not None:

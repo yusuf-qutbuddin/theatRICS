@@ -12,6 +12,7 @@ lmfit
 statsmodels
 openpyxl
 path
+AFMReader
 
 [cellpose]
 cellpose

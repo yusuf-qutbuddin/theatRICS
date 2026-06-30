@@ -6,8 +6,11 @@ import traceback
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
 import pandas as pd
+import numpy as np
 from theatrics.fcsfit import models_and_fit as fit
-
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 @dataclass
 class BatchSummary:
@@ -109,7 +112,12 @@ def run_batch_folder(
     Per-file outputs are still handled locally by the GUI display/export
     if desired, while the batch summary is written once here.
     """
-    csvs = sorted(glob.glob(os.path.join(folder, "**", pattern), recursive=True))
+    csvs = sorted(
+    p for p in glob.glob(
+        os.path.join(folder, "**", pattern), recursive=True
+    )
+    if "Results" not in p.split(os.sep)
+    )
 
     n_total = len(csvs)
     n_ok = 0
@@ -123,8 +131,8 @@ def run_batch_folder(
 
     fitting_model = kwargs["fitting_model"]
     pattern_corrected = pattern[1:]
-    summary_csv = os.path.join(outer_results_dir, f"{fitting_model}_{pattern_corrected}_fit_summary.csv")
-
+    summary_csv = os.path.join(outer_results_dir, f"{fitting_model}_fit_summary.csv")
+    
     if progress_queue is not None:
         progress_queue.put(("progress", 0.0))
 
@@ -136,7 +144,7 @@ def run_batch_folder(
             res = run_single_csv(csv_path, cancel_event=cancel_event, **kwargs)
             last_res = res
             n_ok += 1
-
+            
             # ── per-file: save fit curve CSV + SVG for every file ──
             base = _strip_csv(csv_path)
             fitting_model = kwargs["fitting_model"]
@@ -146,11 +154,12 @@ def run_batch_folder(
             sigma = np.asarray(res["sigma_G"], dtype=float)
             pred = np.asarray(res["ccPrediction"], dtype=float)
 
-            per_file_results_dir = os.path.join(os.path.dirname(base), "Results")
-            os.makedirs(per_file_results_dir, exist_ok=True)
-            edit_base = os.path.join(per_file_results_dir,
+            
+            os.makedirs(outer_results_dir, exist_ok=True)
+            edit_base = os.path.join(outer_results_dir,
                                      os.path.basename(base) + "_" + fitting_model)
 
+            
             # fit curve CSV
             pd.DataFrame({
                 "tau": tau, "G": G,
@@ -190,19 +199,29 @@ def run_batch_folder(
                 row[k] = v[0] if (isinstance(v, list) and len(v) == 1) else v
             row["Filename"] = res.get("base_path", csv_path)
             summary_rows.append(row)
-
+            
             if progress_queue is not None:
                 progress_queue.put(("file_done", res))
                 progress_queue.put(("progress", 100.0 * (i + 1) / max(1, n_total)))
 
         except Exception:
+            
+            import traceback as _tb
+            err = _tb.format_exc()
             failed.append(csv_path)
+            # send the error back so it appears in the GUI log
+            if progress_queue is not None:
+                progress_queue.put(("file_error", 
+                                    f"FAILED: {os.path.basename(csv_path)}\n{err}"))
+                progress_queue.put(("progress",
+                                    100.0 * (i + 1) / max(1, n_total)))
             if progress_queue is not None:
                 progress_queue.put(("progress", 100.0 * (i + 1) / max(1, n_total)))
 
     if summary_rows:
         df = pd.DataFrame(summary_rows)
         df.to_csv(summary_csv, index=False)
+        
     else:
         summary_csv = None
 
