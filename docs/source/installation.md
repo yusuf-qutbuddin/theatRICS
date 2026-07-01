@@ -79,6 +79,17 @@ These are needed across the different workflows:
 
 ---
 
+## Optional dependencies by workflow
+
+| Package | Workflow | Purpose |
+|---------|----------|---------|
+| `opencv-python` | Vesicle Finder | Faster Hough circle detection |
+| `cellpose` | Vesicle Finder | Deep learning segmentation |
+| `picasso` | ICS | Large multi-file TIFF stack loading |
+| `AFMReader` | AFM | Loading JPK QI image files |
+
+---
+
 ## Example dependency installation
 
 If you need to install dependencies manually in an existing environment:
@@ -169,11 +180,37 @@ Also requires:
 - `scikit-image`
 - `openpyxl`
 - `pylibCZIrw`
+
 ### Vesicle Finder
 Requires the standard stack plus optionally:
 - `opencv-python` for faster Hough circle detection
 - `cellpose` for deep learning segmentation
 
+### ICS
+Requires the standard numerical stack plus optionally:
+- `picasso` for loading large multi-file TIFF stacks (`TiffMultiMap`)
+
+Install picasso:
+
+```bash
+pip install picasso
+```
+
+If picasso is not installed, the software falls back to `tifffile` for
+standard TIFF files.
+
+### AFM
+Requires:
+- `AFMReader` for loading JPK QI image files
+
+Install AFMReader:
+
+```bash
+pip install AFMReader
+```
+
+Without AFMReader, JPK files cannot be loaded and the AFM tab will
+raise an error on file load.
 
 Install optional vesicle dependencies:
 

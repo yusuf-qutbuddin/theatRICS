@@ -275,6 +275,98 @@ If that structure is missing, condition summary generation may be skipped.
 
 ---
 
+## ICS
+
+### All G values are NaN
+This usually means the mask is empty — no pixels passed the threshold.
+
+Try:
+- reducing the **Threshold multiplier**
+- checking that the correct TIFF file is selected
+- verifying that the stack contains temporal intensity variation
+
+### Stack is too short
+The stack must contain at least `block_length` frames.
+
+Reduce the block length or use a longer acquisition.
+
+### Batch finds no files
+Check the **File pattern** matches your file extension, for example:
+
+```text
+*.tiff
+```
+
+or for `.tif` files:
+
+```text
+*.tif
+```
+
+Also ensure the selected parent folder contains sample subfolders with
+matching files inside them.
+
+### Block images are not saved
+Ensure **Save block images** is checked before running the analysis and
+that the output directory is writable.
+
+### Combined batch CSV is missing
+This happens when no sample subfolders contain valid matching TIFF files,
+or when all files fail during processing.
+
+Check the **Results & Logs** tab for error messages.
+
+---
+
+## AFM
+
+### "AFMReader is not installed"
+Install the required package:
+
+```bash
+pip install AFMReader
+```
+
+### File will not load
+Check:
+- the file is a valid JPK QI image
+- the selected channel exists in the file
+- the file is not corrupted
+
+### Height image looks inverted or all-black
+Try a different channel, for example `height_retrace` instead of
+`height_trace`.
+
+### No contact points found
+This can happen if:
+- the profile does not cross the object
+- the object is too flat relative to noise
+- the threshold fraction is too high
+
+Try:
+- redrawing the profile so it crosses the full width of the object
+- decreasing the **Threshold fraction**
+
+### Wetting angle looks wrong
+Check that:
+- both click points are on the flat membrane, not on the object
+- the **Fit points** slider is not set too high (which would include
+  flat membrane in the slope fit)
+- the profile crosses the object centrally
+
+### Profile is very noisy
+Try:
+- increasing the **Smooth window** parameter
+- increasing the **Profile points** for finer spatial sampling
+
+### Save results fails
+Check that:
+- a save folder has been selected
+- the folder is writable
+- at least one profile has been drawn before clicking Save results
+
+---
+
 
 ## GUI responsiveness and background tasks
 

@@ -226,8 +226,76 @@ Typical outputs include:
 
 ---
 
+## Workflow 6: ICS analysis
 
-## Workflow 6: Vesicle / GUV detection and membrane analysis
+Use this workflow to track changes in molecular correlation over time using
+temporal Image Correlation Spectroscopy on TIFF image stacks.
+
+### Single-file analysis
+1. Open the **ICS** tab.
+2. Select a **Single TIFF** file.
+3. Set:
+   - block length
+   - frame skip
+   - threshold multiplier
+4. Optionally enable **Save block images**.
+5. Click **Run ICS**.
+
+### Batch analysis
+1. Select a **Batch folder** containing sample subfolders.
+2. Set a **File pattern**, for example:
+
+   ```text
+   *.tiff
+   ```
+
+3. Set analysis parameters as above.
+4. Click **Run ICS**.
+
+The software processes each subfolder as one sample and writes a combined
+summary CSV and plot in the parent folder.
+
+### Outputs
+Per file:
+- block statistics CSV
+- overview SVG figure
+- optional block diagnostic TIFFs
+
+Batch:
+- combined CSV across all samples
+- combined overview SVG plot
+
+---
+
+## Workflow 7: AFM condensate analysis
+
+Use this workflow to measure heights and wetting angles of condensates or
+particles sitting on a membrane surface from JPK QI AFM images.
+
+### Steps
+1. Open the **AFM** tab.
+2. Click **Browse** and select a `.jpk-qi-image` file.
+3. Choose the **Channel** (typically `height_trace`).
+4. Click **Load File**.
+5. Click on the AFM image:
+   - first click: start point on the bare membrane
+   - second click: end point on the bare membrane on the other side
+   - the line must cross the object
+6. Inspect the profile panel:
+   - adjust the **Fit points** slider to optimise the wetting angle
+   - adjust **Threshold fraction** if contact points are placed incorrectly
+7. Repeat for additional objects.
+8. Click **Save results**.
+
+### Outputs
+- per-profile CSV with full height arrays
+- summary CSV with all scalar measurements
+- SVG figure export
+
+---
+
+
+## Workflow 8: Vesicle / GUV detection and membrane analysis
 
 Use this workflow to detect GUVs in CZI microscopy data and analyze their membranes.
 

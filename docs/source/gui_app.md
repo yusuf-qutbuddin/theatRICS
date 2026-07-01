@@ -307,6 +307,95 @@ This tab is used for ROI-based FRAP analysis from annotated CZI time series.
 
 ---
 
+## ICS
+
+The **ICS** tab performs temporal Image Correlation Spectroscopy on TIFF image
+stacks, computing block-wise normalised correlation values to track changes in
+molecular density or aggregation state over time.
+
+### Main inputs
+- **Single TIFF**: a single TIFF image stack
+- **Batch folder**: a parent folder containing sample subfolders
+- **File pattern**: filename pattern for batch mode, for example `*.tiff`
+- **Block length (frames)**: number of frames per temporal block
+- **Frame skip (lag τ)**: temporal lag between correlated frames
+- **Bin frames**: optional frame binning before block analysis
+- **Threshold multiplier**: controls which pixels are included via MIP-based masking
+- **Save block images**: optionally save per-block diagnostic TIFFs
+
+### Actions
+- **Run ICS**
+
+### Display
+The ICS display shows a 2×2 overview figure:
+- mean G ± SD vs block number
+- normalised G vs block number
+- mean intensity image of the last block
+- G map of the last block
+
+### Typical use
+Use this tab to:
+- track changes in molecular clustering or aggregation over time
+- compare normalised correlation across experimental conditions
+- batch-process multiple samples and export a combined summary
+
+---
+
+## AFM
+
+The **AFM** tab loads JPK QI atomic force microscopy height images and performs
+interactive line-profile analysis for measuring condensate heights and wetting
+angles on membrane surfaces.
+
+### Main inputs
+- **JPK file**: a `.jpk-qi-image` or `.jpk` file
+- **Channel**: height channel to load (`height_trace`, `height_retrace`,
+  `adhesion_force_trace`, `stiffness_trace`)
+
+### Profile parameters
+- **Fit points**: number of data points used to fit the wetting angle slope,
+  adjusted with a real-time slider (3–60 points)
+- **Smooth window**: Savitzky-Golay smoothing window length
+- **Smooth poly order**: Savitzky-Golay polynomial order
+- **Profile points**: number of interpolated sample points along the line
+- **Threshold fraction**: fraction of peak height used to define contact points
+
+### Actions
+- **Load File**: loads and displays the height image
+- **Reset last**: removes the most recently drawn profile
+- **Clear all**: removes all profiles
+- **Save results**: exports all profile arrays, summary CSV, and SVG figure
+
+### Interaction
+After loading a file, draw a line profile by clicking two points on the AFM
+image:
+1. Click the **start point** on the bare membrane on one side of the object
+2. Click the **end point** on the bare membrane on the other side
+
+The line must cross the object. The two clicked heights define the linear baseline.
+
+### Display
+The AFM display contains two panels:
+- **Left**: height image with false-colour map, drawn profile lines, and click markers
+- **Right**: line profile showing raw data, baseline, corrected profile,
+  contact point markers, tangent lines, and wetting angle title
+
+### Profiles listbox
+Completed profiles are listed with:
+- peak height in nm
+- FWHM in nm
+- mean wetting angle in degrees
+
+Click a profile to display it in the right panel.
+
+### Typical use
+Use this tab to measure:
+- condensate height above a supported lipid bilayer
+- wetting angles at the condensate-membrane contact line
+- FWHM and contact width of surface-adsorbed objects
+
+---
+
 ## Vesicle Finder
 
 The **Vesicle Finder** tab detects vesicles (such as GUVs) in CZI images or time series, allows interactive selection, and exports either square crops or unrolled membrane strips.

@@ -1,7 +1,7 @@
 # theatRICS
 
-theatRICS is a GUI application for **Raster Image Correlation Spectroscopy (RICS)**
-and **perpendicular scanning FCS (pSFCS)** analysis.
+theatRICS is a GUI application for quantitative fluorescence microscopy analysis,
+integrating multiple workflows into a single interface.
 
 ```{toctree}
 :maxdepth: 2
@@ -15,6 +15,8 @@ workflow/rics_fitting
 workflow/sfcs
 workflow/fcs_fitting
 workflow/frap
+workflow/ics
+workflow/afm
 workflow/vesicle_finder
 workflow/diffusion_map
 outputs

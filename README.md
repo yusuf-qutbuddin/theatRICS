@@ -2,13 +2,16 @@
 
 [![Documentation Status](https://readthedocs.org/projects/theatrics/badge/?version=latest)](https://theatrics.readthedocs.io/en/latest/?badge=latest)
 
-**theatRICS** is a Python GUI application for quantitative fluorescence microscopy analysis, integrating multiple workflows into a single interface:
+**theatRICS** is a Python GUI application for quantitative fluorescence microscopy
+analysis, integrating multiple workflows into a single interface:
 
 - **RICS** — Raster Image Correlation Spectroscopy
 - **SFCS / pSFCS** — scanning / perpendicular scanning FCS
 - **FCS curve fitting**
 - **FRAP analysis**
+- **ICS** — temporal Image Correlation Spectroscopy
 - **Vesicle / GUV detection and membrane analysis**
+- **AFM profile analysis**
 - **Synthetic image simulation**
 
 ---
@@ -18,11 +21,17 @@
 - Unified GUI for multiple fluctuation-analysis and microscopy workflows
 - Interactive plotting with embedded Matplotlib canvases
 - Support for **single-file** and **batch** processing
+- Background worker processes for all heavy computations keeping the GUI responsive
 - Export of numerical outputs and publication-quality **SVG** figures
 - Model-based fitting for correlation curves and recovery experiments
+- 20+ FCS models including MEMFCS with Shannon and Shannon-Jaynes entropy
+- Spatially resolved diffusion maps from sliding-window RICS fitting
 - GUV detection with multiple methods including the improved and modified version of Kohyama et al. 2022 weighted peripheral intensity method
 - Membrane straightening and intensity heatmaps for GUV time series
+- AFM wetting angle and height measurement with real-time slider feedback
+- Bleach correction for SFCS data
 - Session saving/loading and central logging inside the GUI
+- Dark mode toggle
 
 ---
 
@@ -51,6 +60,24 @@
 - automatic bleach-frame and control-ROI detection
 - optional imaging bleach correction
 - export raw data and summary spreadsheets
+
+### ICS
+- perform temporal Image Correlation Spectroscopy on TIFF image stacks
+- block-wise normalised correlation computation at user-defined temporal lag
+- intensity thresholding and pixel masking per block
+- per-block diagnostic image export
+- normalised correlation traces over time
+- batch aggregation across sample subfolders with combined CSV and plot export
+
+### AFM
+- load JPK QI atomic force microscopy height images
+- interactive line-profile drawing by clicking two points on the image
+- automatic linear baseline correction from user-clicked membrane heights
+- Savitzky-Golay smoothing and contact-point detection
+- wetting angle measurement at left and right contact points
+- peak height and FWHM measurement
+- real-time wetting angle update using the fit-points slider
+- export of per-profile arrays, summary CSV, and SVG figure
 
 ### Vesicle Finder
 - detect GUVs in CZI fluorescence or transmitted-light images
@@ -179,6 +206,8 @@ The main interface is organized into tabs.
 | SFCS | Compute scanning FCS autocorrelation curves |
 | FCS Fitting | Fit precomputed FCS correlation CSVs |
 | FRAP | Analyze FRAP recovery from CZI files |
+| ICS | Temporal image correlation spectroscopy on TIFF stacks |
+| AFM | JPK height image analysis: profiles, heights, wetting angles |
 | Vesicle Finder | Detect GUVs, export crops, straighten membranes |
 | Results & Logs | Log output, session management |
 
@@ -196,6 +225,18 @@ The main interface is organized into tabs.
 
 ### FRAP
 1. FRAP → analyze recovery from annotated CZI files
+
+### ICS (temporal correlation)
+1. ICS → load TIFF stack, set block length and frame lag
+2. Inspect normalised G vs time trace
+3. (Batch) process sample subfolders and export combined plot
+
+### AFM condensate/particle analysis
+1. AFM → load JPK QI image
+2. Click two points on the membrane (one on each side of the object)
+3. Inspect height profile, wetting angles, and FWHM
+4. Adjust fit-points slider to optimise angle calculation
+5. Draw additional profiles, then click Save results
 
 ### GUV membrane analysis
 1. Vesicle Finder → detect GUVs
@@ -260,6 +301,19 @@ The main interface is organized into tabs.
 - `*_FRAP_summary.xlsx`
 - `*_FRAP_overview.svg`
 
+#### ICS
+- `<stem>_threshold<value>_corr.csv` (per-file block statistics)
+- `<stem>_ICS_overview.svg` (per-file overview figure)
+- `<stem>_b<n>_MIP.tiff`, `*_mean.tiff`, `*_mask.tiff`, `*_corr.tiff`
+  (optional block diagnostic images)
+- `<timestamp>_allSamples_ICS.csv` (batch combined CSV)
+- `<timestamp>_allSamples_ICS.svg` (batch combined plot)
+
+#### AFM
+- `<stem>_profile<n>.csv` (full profile arrays per profile)
+- `<stem>_AFM_summary.csv` (scalar measurements for all profiles)
+- `<stem>_AFM_overview.svg` (combined figure export)
+
 #### Vesicle Finder (crops)
 - `<stem>_vesicle_crops/vesicle_1.tif`
 
@@ -284,29 +338,56 @@ The main interface is organized into tabs.
 ## Repository structure
 
 ```text
-src/
-  theatrics/
-    main.py
-    gui_app.py
-    workers/
-      vesicle_worker.py
-      frap_worker.py
-      fcsfit_worker.py
-      ...
-    vesicle/
-      __init__.py
-      detection.py
-    fcsfit/
-      __init__.py
-      calculations.py
-      models_and_fit.py
-      batch.py
-    frap/
-      __init__.py
-      analysis.py
-docs/
-pyproject.toml
-.readthedocs.yaml
+theatRICS/
+├── src/
+│   └── theatrics/
+│       ├── __init__.py
+│       ├── main.py
+│       ├── gui_app.py
+│       │
+│       ├── workers/
+│       │   ├── afm_worker.py
+│       │   ├── diffmap_worker.py
+│       │   ├── export_worker.py
+│       │   ├── fcsfit_worker.py
+│       │   ├── fit_worker.py
+│       │   ├── frap_worker.py
+│       │   ├── ics_worker.py
+│       │   ├── sfcs_worker.py
+│       │   ├── sim_worker.py
+│       │   └── vesicle_worker.py
+│       │
+│       ├── afm/
+│       │   └── analysis.py
+│       │
+│       ├── fcsfit/
+│       │   ├── batch.py
+│       │   ├── calculations.py
+│       │   ├── memfcs.py
+│       │   └── models_and_fit.py
+│       │
+│       ├── frap/
+│       │   └── analysis.py
+│       │
+│       ├── ics/
+│       │   └── analysis.py
+│       │
+│       ├── modules/
+│       │   ├── export_rics.py
+│       │   ├── inspect_metadata.py
+│       │   ├── rics_fit.py
+│       │   ├── simRICS.py
+│       │   └── SFCS_module.py
+│       │
+│       ├── utils/
+│       │   ├── bleach_correction.py
+│       │   ├── file_utils.py
+│       │   └── mp_utils.py
+│       │
+│       └── vesicle/
+│           └── detection.py
+│
+
 ```
 
 ---
@@ -333,6 +414,23 @@ The vesicle detection pipeline uses:
 ### GUI does not start
 - Check Tkinter is installed
 - Ensure the correct Python environment is active
+
+### ICS produces all NaN G values
+- reduce the **Threshold multiplier**
+- check that the TIFF contains temporal intensity variation
+
+### ICS batch finds no files
+- check the **File pattern** matches your file extension (`.tif` vs `.tiff`)
+- ensure sample subfolders exist inside the selected parent folder
+
+### AFM file will not load
+- install AFMReader: `pip install AFMReader`
+- check the selected channel exists in the file
+
+### AFM contact points are placed incorrectly
+- adjust the **Threshold fraction** in the profile parameters
+- ensure both click points are on the flat membrane surface,
+  not on the object itself
 
 ### Vesicle detection finds wrong circles
 - Enable **Save debug images** and inspect the intermediate outputs

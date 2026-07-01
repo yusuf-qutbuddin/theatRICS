@@ -206,7 +206,7 @@ def find_contact_and_angles(distances_nm, h_adj, n_fit_points=15):
 class InteractiveProfileSelector:
 
     def __init__(self, height_data, pixel_size_nm, scan_size_um):
-        self.height_data   = height_data
+        self.height_data   = height_data 
         self.pixel_size_nm = pixel_size_nm
         self.scan_size_um  = scan_size_um
         self.ny, self.nx   = height_data.shape

@@ -244,6 +244,107 @@ depending on how batch aggregation is configured.
 
 ---
 
+## ICS outputs
+
+The **ICS** tab writes outputs next to each analyzed TIFF file and, in batch
+mode, also in the parent selected folder.
+
+### Per-file outputs
+
+For an input file `sample.tiff`:
+
+- `sample_threshold<value>_corr.csv`
+
+  Per-block statistics table with columns:
+
+  | Column | Contents |
+  |--------|----------|
+  | `block` | Block index |
+  | `mean_G` | Mean G over masked pixels |
+  | `sd_G` | Standard deviation of G |
+  | `se_G` | Standard error of G |
+  | `n_pixels` | Number of masked pixels |
+  | `Normalized` | G normalised to block 0 |
+
+- `sample_ICS_overview.svg`
+
+  Vector export of the 2×2 overview figure.
+
+### Optional block diagnostic images
+
+If **Save block images** is enabled, four images are saved per block:
+
+| File | Contents |
+|------|----------|
+| `*_b<n>_MIP.tiff` | Maximum intensity projection of the block |
+| `*_b<n>_mean.tiff` | Time-averaged intensity of the block |
+| `*_b<n>_mask.tiff` | Binary pixel inclusion mask |
+| `*_b<n>_corr.tiff` | Normalised G map |
+
+### Batch outputs
+
+After processing all files in a batch, the software writes in the **parent
+selected folder**:
+
+- `<timestamp>_allSamples_ICS.csv`
+
+  Combined normalised G table with mean and SD columns per sample.
+
+- `<timestamp>_allSamples_ICS.svg`
+
+  Combined plot of normalised G vs block number for all samples.
+
+Per-sample aggregated CSVs are also written inside each sample subfolder:
+
+- `<sample>_aggregated.csv`
+
+---
+
+## AFM outputs
+
+For an input file `sample.jpk-qi-image`, saving to a selected folder produces:
+
+```text
+<selected folder>/
+    sample_profile1.csv
+    sample_profile2.csv
+    ...
+    sample_AFM_summary.csv
+    sample_AFM_overview.svg
+```
+
+### `*_profile<n>.csv`
+
+Full numerical arrays for one profile:
+
+| Column | Contents |
+|--------|----------|
+| `distance_nm` | Distance along the profile in nm |
+| `height_raw_nm` | Raw sampled height in nm |
+| `height_smoothed_nm` | Savitzky-Golay smoothed height in nm |
+| `baseline_nm` | Linear baseline in nm |
+| `height_corrected_nm` | Baseline-corrected height in nm |
+
+### `*_AFM_summary.csv`
+
+One row per profile with columns:
+
+- `Profile` (number)
+- `peak_height_nm`
+- `fwhm_nm`
+- `contact_width_nm`
+- `theta_left_deg`
+- `theta_right_deg`
+- `theta_mean_deg`
+- `start_px_x`, `start_px_y`
+- `end_px_x`, `end_px_y`
+
+### `*_AFM_overview.svg`
+
+Vector export of the current two-panel AFM display figure.
+
+---
+
 ## Logs and session files
 
 The **Results & Logs** tab allows saving auxiliary outputs.
