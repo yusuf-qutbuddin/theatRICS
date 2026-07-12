@@ -418,8 +418,225 @@ def process_single_file(filepath):
                          photometric='minisblack')
   
     
+# ────────────────────────────────────────────────────────────────
+# PTU (PicoQuant Luminosa) support
+# ────────────────────────────────────────────────────────────────
 
-#%% Main
+try:
+    import tttrlib
+    TTTRLIB_AVAILABLE = True
+except ImportError:
+    TTTRLIB_AVAILABLE = False
+
+
+def _ptu_get_tag(header_data: dict, key: str, fallback=None):
+    """
+    Safely extract a scalar value from header.data.
+    header.data values are always lists; take the first element.
+    Returns fallback if key is missing or value is None.
+    """
+    val = header_data.get(key, None)
+    if val is None:
+        return fallback
+    if isinstance(val, list):
+        if len(val) == 0:
+            return fallback
+        val = val[0]
+    if val is None:
+        return fallback
+    return val
+
+
+def read_ptu_metadata(filepath: str) -> dict:
+    """
+    Read pixel size, pixel dwell time, line time, and image dimensions
+    from a PicoQuant Luminosa PTU CLSM image file.
+
+    Uses header.data (a plain dict, values are lists) and
+    CLSMImage direct attributes where available.
+
+    Confirmed working tag names from Luminosa PTU header:
+        ImgHdr_PixResol       — pixel size in µm/pixel
+        ImgHdr_TimePerPixel   — pixel dwell time in ms
+        ImgHdr_PixX           — number of pixels (fast axis)
+        ImgHdr_PixY           — number of lines (slow axis)
+        ImgHdr_MaxFrames      — maximum frames set in acquisition
+
+    CLSMImage direct attributes (more reliable than header tags):
+        clsm_image.pixel_duration  — pixel dwell time in seconds
+        clsm_image.line_duration   — line time in seconds
+        clsm_image.n_frames        — actual number of frames recorded
+        clsm_image.n_lines         — number of lines
+        clsm_image.n_pixel         — number of pixels per line
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the .ptu file.
+
+    Returns
+    -------
+    dict with keys:
+        pixel_size_nm       : float  — nm/pixel
+        pixel_dwell_time_us : float  — µs per pixel
+        line_time_ms        : float  — ms per line
+        n_frames            : int    — actual frames recorded
+        n_lines             : int    — lines per frame
+        n_pixels            : int    — pixels per line
+        channels            : list   — available routing channel indices
+    """
+    if not TTTRLIB_AVAILABLE:
+        raise ImportError(
+            "tttrlib is not installed. "
+            "Install it with:  pip install tttrlib"
+        )
+
+    tttr_data   = tttrlib.TTTR(str(filepath))
+    header_data = tttr_data.header.data   # plain dict, values are lists
+
+    # ── pixel size ───────────────────────────────────────────────
+    # ImgHdr_PixResol is in µm/pixel
+    pix_resol_um = _ptu_get_tag(header_data, "ImgHdr_PixResol", None)
+    pixel_size_nm = float(pix_resol_um) * 1000.0 if pix_resol_um is not None else None
+
+    # ── image dimensions from header ─────────────────────────────
+    n_pixels_hdr = _ptu_get_tag(header_data, "ImgHdr_PixX", None)
+    n_lines_hdr  = _ptu_get_tag(header_data, "ImgHdr_PixY", None)
+
+    # ── CLSMImage for reliable timing and actual frame count ─────
+    # channels=[0] is safe here — we only need timing, not all photons
+    clsm_image = tttrlib.CLSMImage(tttr_data, fill=False, channels=[0])
+
+    # pixel_duration and line_duration are in milliseconds
+    pixel_dwell_time_us = float(clsm_image.pixel_duration) * 1e3
+    line_time_ms        = float(clsm_image.line_duration)  
+
+    # actual frame count from CLSM (more reliable than ImgHdr_MaxFrames)
+    n_frames = int(clsm_image.n_frames)
+    n_lines  = int(clsm_image.n_lines)
+    n_pixels = int(clsm_image.n_pixel)
+
+    # ── available routing channels ───────────────────────────────
+    channels = sorted(int(c) for c in np.unique(tttr_data.routing_channels))
+
+    return {
+        "pixel_size_nm":       pixel_size_nm,
+        "pixel_dwell_time_us": pixel_dwell_time_us,
+        "line_time_ms":        line_time_ms,
+        "n_frames":            n_frames,
+        "n_lines":             n_lines,
+        "n_pixels":            n_pixels,
+        "channels":            channels,
+    }
+
+
+def read_ptu_stack(filepath: str,
+                   channel: int = 0) -> np.ndarray:
+    """
+    Load a PicoQuant Luminosa PTU CLSM image file and return the
+    photon count image stack as a numpy array.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the .ptu file.
+    channel  : int
+        Routing channel index to extract (e.g. 0, 1, 2, 4 for Luminosa).
+        Use read_ptu_metadata() to see available channels first.
+
+    Returns
+    -------
+    stack : np.ndarray, shape (n_frames, n_lines, n_pixels), dtype float32
+        Photon count image stack.
+
+    Raises
+    ------
+    ImportError : if tttrlib is not installed
+    ValueError  : if the requested channel is not present in the file
+    """
+    if not TTTRLIB_AVAILABLE:
+        raise ImportError(
+            "tttrlib is not installed. "
+            "Install it with:  pip install tttrlib"
+        )
+
+    tttr_data = tttrlib.TTTR(str(filepath))
+
+    # validate channel
+    available = sorted(int(c) for c in np.unique(tttr_data.routing_channels))
+    if channel not in available:
+        raise ValueError(
+            f"Channel {channel} not found in PTU file. "
+            f"Available channels: {available}"
+        )
+
+    # fill=True fills the image with photon counts
+    # channels=[channel] selects the routing channel
+    clsm_image = tttrlib.CLSMImage(tttr_data, fill=True, channels=[channel])
+
+    # intensity shape from debug: (n_frames, n_lines, n_pixels)
+    # this is confirmed for Luminosa single-channel selection
+    intensity = clsm_image.intensity
+
+    # defensive: handle unlikely extra leading dim
+    if intensity.ndim == 4:
+        # (n_channels_selected, n_frames, n_lines, n_pixels) — take ch 0
+        intensity = intensity[0]
+
+    return intensity.astype(np.float32)
+
+
+def process_all_frames_ptu(filepath: str,
+                            channel: int = 0,
+                            window_size: int = 3,
+                            crop_factor: float = 0.5,
+                            correct_drift: bool = False) -> tuple:
+    """
+    Full RICS export pipeline for a PicoQuant Luminosa PTU file.
+
+    Reads the photon count image stack, optionally crops and
+    drift-corrects it, then computes the RICS correlation map and
+    uncertainty map using the same pipeline as CZI and TIFF.
+
+    Parameters
+    ----------
+    filepath     : str   — path to .ptu file
+    channel      : int   — routing channel index (0-based, see available
+                           channels from read_ptu_metadata())
+    window_size  : int   — moving-average window for background subtraction
+    crop_factor  : float — fraction of image to keep (centred crop)
+    correct_drift: bool  — apply drift correction before correlation
+
+    Returns
+    -------
+    RICS_map        : np.ndarray (H, W)
+    sd_map          : np.ndarray (H, W)
+    all_frames      : np.ndarray (n_frames, H, W) — raw cropped stack
+    corrected_stack : np.ndarray (n_frames, H, W) — background-subtracted
+    """
+    if not TTTRLIB_AVAILABLE:
+        raise ImportError(
+            "tttrlib is not installed. "
+            "Install it with:  pip install tttrlib"
+        )
+
+    # load full stack — shape (n_frames, n_lines, n_pixels)
+    stack    = read_ptu_stack(filepath, channel=channel)
+    n_frames = stack.shape[0]
+
+    # crop centre
+    cropped = crop_center(stack, crop_factor=crop_factor)
+
+    # optional drift correction
+    if correct_drift:
+        cropped = drift_correct(cropped)
+
+    # reuse existing TIFF pipeline (works on any float32 stack)
+    RICS_map, sd_map, all_frames, corrected_stack = process_all_frames_tiff(
+        cropped, n_frames, 0, window_size
+    )
+
+    return RICS_map, sd_map, all_frames, corrected_stack#%% Main
 
 if __name__ == '__main__':
     pass

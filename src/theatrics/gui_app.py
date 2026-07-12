@@ -21,40 +21,105 @@ import matplotlib.gridspec as gridspec
 import traceback
 import matplotlib
 matplotlib.use('agg')
-from pylibCZIrw import czi as pyczi
+# from pylibCZIrw import czi as pyczi
 import multiprocessing
 import queue
 import tifffile
 import scipy.ndimage
 import json
 import pandas as pd
-from theatrics.workers.sfcs_worker import sfcs_process_main_curvefit
-from theatrics.workers.export_worker import export_rics_process_main
-from theatrics.workers.fit_worker import fit_rics_process_main
-from theatrics.workers.sim_worker import simulate_rics_process_main
-from theatrics.workers.diffmap_worker import diffusion_map_process_main
-from theatrics.workers.fcsfit_worker import fcsfit_process_main
-from theatrics.workers.frap_worker import frap_process_main
-from theatrics.workers.vesicle_worker import vesicle_process_main
-from theatrics.workers.ics_worker import ics_process_main
-from theatrics.workers.afm_worker import afm_worker_main
+import platform
 
-from theatrics.vesicle import detection as vesicle_detection
-from theatrics.fcsfit import calculations as calculate
+# from pathlib import Path
+
+
+
+# ── Heavy / workflow-specific imports are intentionally NOT done here. ──────
+#
+# This module is imported by theatrics.launcher at application startup,
+# BEFORE the user has chosen which category (Correlation Methods / AFM /
+# Imaging Methods) to open. To keep launcher startup fast and to avoid
+# unconditionally importing heavy optional dependencies (tttrlib,
+# pylibCZIrw, cellpose, AFMReader, scipy-heavy submodules, etc.) that a
+# given session may never actually need, each worker/analysis module is
+# imported LAZILY, inside the create_*_tab() method (and the run_*/
+# _poll_*_queue methods that use it) for that specific tab.
+#
+# Python caches imports in sys.modules, so importing the same module
+# lazily multiple times (e.g. every time a tab is (re)created) has no
+# extra cost beyond the first import -- this is purely about deferring
+# cost until the relevant tab is actually built, not about avoiding
+# repeated work.
+#
+# theatrics.utils.file_utils and theatrics.utils.mp_utils are lightweight
+# (no heavy third-party dependencies) and are used across almost every
+# tab, so they remain eagerly imported here for convenience.
 from theatrics.utils.file_utils import get_files_from_folder
 from theatrics.utils.mp_utils import clamp_workers
-from theatrics.frap import analysis as frap_analysis
 
+# ── Tab registry for modular startup ────────────────────────────────────────
+# Maps a short tab key to the name of the ModularRICSGUI method that
+# creates that tab. Used both by the full/legacy application (which
+# creates all tabs) and by theatrics.launcher.TheatricsLauncher, which
+# creates a window containing only a chosen category's subset of tabs.
+TAB_CREATORS = {
+    "simulation":   "create_simulation_tab",
+    "rics_export":  "create_rics_export_tab",
+    "rics_fitting": "create_fitting_tab",
+    "sfcs":         "create_SFCS_tab",
+    "fcs_export":   "create_ptu_fcs_tab",
+    "fcs_fitting":  "create_fcs_fit_tab",
+    "frap":         "create_frap_tab",
+    "ics":          "create_ics_tab",
+    "afm":          "create_afm_tab",
+    "vesicle":      "create_vesicle_tab",
+    "results":      "create_results_tab",
+}
 
-
+# Which tab keys belong to each of the three modular-launcher categories.
+#
+# NOTE (flagged assumptions, not explicitly specified by the user):
+#   - "simulation" (Image Simulation) is included under "Correlation
+#     Methods" since it generates synthetic RICS data for testing the
+#     same pipeline. Remove it from the list below if not wanted.
+#   - "results" (Results & Logs) is included in EVERY category so each
+#     window is self-contained with its own log/session tab.
+CATEGORY_TABS = {
+    "Correlation Methods": [
+        "simulation", "rics_export", "rics_fitting", "sfcs",
+        "fcs_export", "fcs_fitting", "results",
+    ],
+    "AFM": [
+        "afm", "results",
+    ],
+    "Imaging Methods": [
+        "ics", "vesicle", "frap", "results",
+    ],
+}
 
 class ModularRICSGUI:
-    def __init__(self, root):
+    def __init__(self, root, tabs=None, window_title="theatRICS"):
         self.root = root
-        self.root.title("theatRICS")
-        
-        self.root.geometry("1400x900")
+        self.root.title(window_title)
 
+        self.root.geometry("1400x900")
+        self._dialog_parent = root
+        # ── modular startup ──────────────────────────────────────────────────
+        # `tabs` is an optional list of keys from the module-level
+        # TAB_CREATORS registry, specifying which tabs to build. If None
+        # (the default), ALL tabs are created -- this preserves the
+        # original monolithic behaviour for any code that constructs
+        # ModularRICSGUI directly, while theatrics.launcher.TheatricsLauncher
+        # passes an explicit, category-specific subset instead.
+        if tabs is None:
+            tabs = list(TAB_CREATORS.keys())
+        # "Results & Logs" is always included, even if the caller forgot
+        # it, since several tabs log their output into it.
+        if "results" not in tabs:
+            tabs = list(tabs) + ["results"]
+        self.enabled_tabs = tabs
+        # self._set_dpi_scaling()   
+        # self._set_default_fonts()
         # Initialize variables
         self.current_image_stack = None
         self.current_file = None
@@ -66,13 +131,36 @@ class ModularRICSGUI:
         self.fit_results = None
         self.result_queue = queue.Queue()
         self.progress_queue = None
-        # Check if modules loaded successfully
-        if not all([sfcs_process_main_curvefit, export_rics_process_main, fit_rics_process_main, simulate_rics_process_main, diffusion_map_process_main, get_files_from_folder, clamp_workers]):
-            self.show_module_error()
-            return
+        
 
         # Create main interface
         self.setup_gui()
+    
+    def _ask_open_filename(self, **kwargs) -> str:
+        """Wrapper for filedialog.askopenfilename with correct parent."""
+        from tkinter import filedialog
+        return filedialog.askopenfilename(parent=self._dialog_parent, **kwargs)
+
+    def _ask_directory(self, **kwargs) -> str:
+        """Wrapper for filedialog.askdirectory with correct parent."""
+        from tkinter import filedialog
+        return filedialog.askdirectory(parent=self._dialog_parent, **kwargs)
+
+    def _ask_saveas_filename(self, **kwargs) -> str:
+        """Wrapper for filedialog.asksaveasfilename with correct parent."""
+        from tkinter import filedialog
+        return filedialog.asksaveasfilename(parent=self._dialog_parent, **kwargs)
+    def _showwarning(self, title, message):
+        from tkinter import messagebox
+        messagebox.showwarning(title, message, parent=self._dialog_parent)
+
+    def _showerror(self, title, message):
+        from tkinter import messagebox
+        messagebox.showerror(title, message, parent=self._dialog_parent)
+
+    def _askyesno(self, title, message):
+        from tkinter import messagebox
+        return messagebox.askyesno(title, message, parent=self._dialog_parent)
 
     def show_module_error(self):
         """Show error if modules couldn't be loaded"""
@@ -104,19 +192,23 @@ class ModularRICSGUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.grid(row=0, column=0, sticky='nsew')
 
-        # Create tabs
-        self.create_simulation_tab()
-        self.create_rics_export_tab()  
-        self.create_fitting_tab()
-        self.create_SFCS_tab()
-        self.create_fcs_fit_tab()
-        self.create_frap_tab()
-        self.create_ics_tab()
-        self.create_afm_tab()
-        self.create_vesicle_tab()
-        self.create_results_tab()
-
-
+        # ── modular tab creation ─────────────────────────────────────────────
+        # Only build the tabs requested via self.enabled_tabs. Tabs are
+        # created in this fixed, sensible order regardless of the order
+        # they happen to appear in self.enabled_tabs.
+        _tab_order = [
+            "simulation", "rics_export", "rics_fitting", "sfcs",
+            "fcs_export", "fcs_fitting", "frap", "ics", "afm",
+            "vesicle", "results",
+        ]
+        from theatrics.splash import SplashScreen
+        splash = SplashScreen(self.root)
+        for tab_key in _tab_order:
+            if tab_key in self.enabled_tabs:
+                creator_name = TAB_CREATORS[tab_key]
+                getattr(self, creator_name)()
+        self.root.after(2000, splash.dismiss)
+        
         self.status_var = tk.StringVar()
         self.status_var.set("Ready - All modules loaded successfully")
         self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN)
@@ -151,6 +243,8 @@ class ModularRICSGUI:
         
     def create_simulation_tab(self):
         """Create the image simulation tab using simRICS module"""
+        from theatrics.workers.sim_worker import simulate_rics_process_main
+        self._simulate_rics_process_main = simulate_rics_process_main
         sim_frame = ttk.Frame(self.notebook)
         self.notebook.add(sim_frame, text="Image Simulation")
 
@@ -265,6 +359,8 @@ class ModularRICSGUI:
 
     def create_rics_export_tab(self):
         """Create the RICS export tab using export_rics module"""
+        from theatrics.workers.export_worker import export_rics_process_main
+        self._export_rics_process_main = export_rics_process_main
         export_frame = ttk.Frame(self.notebook)
         self.notebook.add(export_frame, text="RICS Export")
 
@@ -299,7 +395,7 @@ class ModularRICSGUI:
         ttk.Label(export_params, text="Channel to use:").grid(row=row, column=0, sticky='w', pady=2)
         self.channel = tk.StringVar(value=0)
         model_combo = ttk.Combobox(export_params, textvariable=self.channel, 
-                                   values=[0,1], width=12)
+                                   values=[0,4], width=12)
         model_combo.grid(row=row, column=1, pady=2)
         row += 1
         ttk.Label(export_params, text="Crop factor:").grid(row=row, column=0, sticky='w', pady=2)
@@ -341,6 +437,8 @@ class ModularRICSGUI:
 
     def create_SFCS_tab(self):
         """Create the SFCS tab using SFCS module"""
+        from theatrics.workers.sfcs_worker import sfcs_process_main_curvefit
+        self._sfcs_process_main_curvefit = sfcs_process_main_curvefit
         SFCS_frame = ttk.Frame(self.notebook)
         self.notebook.add(SFCS_frame, text="SFCS")
 
@@ -371,7 +469,7 @@ class ModularRICSGUI:
         channel_frame.grid(row=row, column=1, columnspan=2, pady=2, sticky='ew')
         self.sfcs_channel = tk.StringVar(value="0")
         model_combo = ttk.Combobox(channel_frame, textvariable=self.sfcs_channel,  # Fixed parent
-                                   values=["0", "1"], width=12)  # String values for Combobox
+                                   values=["0", "1", "2", "3", "4"], width=12)  # String values for Combobox
         model_combo.pack(side=tk.LEFT)  # Fixed: proper packing
 
         row += 1
@@ -407,14 +505,715 @@ class ModularRICSGUI:
         SFCS_toolbar.update()
 
     def browse_metadata_file(self):
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Select metadata CZI file",
             filetypes=[("CZI files", "*.czi"), ("All files", "*.*")]
         )
         if filename:
             self.file_for_metadata.set(filename)
-            
+    
+
+    # ═════════════════════════════════════════════════════════════════════════════
+    # PTU FCS / PIE tab
+    # ═════════════════════════════════════════════════════════════════════════════
+
+    def create_ptu_fcs_tab(self):
+        """FCS correlation export tab for PicoQuant PTU files (with PIE support)
+        and Zeiss ConfoCor3/LSM980 .raw files."""
+        from theatrics.workers.ptu_correlate_worker import ptu_correlate_worker_main
+        self._ptu_correlate_worker_main = ptu_correlate_worker_main
+
+        ptu_frame = ttk.Frame(self.notebook)
+        self.notebook.add(ptu_frame, text="FCS Export")
+
+        # ── scrollable left panel ────────────────────────────────────────────
+        # We wrap in a Canvas so the long parameter list can be scrolled
+        left_outer = ttk.Frame(ptu_frame)
+        left_outer.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        canvas_scroll = tk.Canvas(left_outer, width=460, highlightthickness=0)
+        scrollbar     = ttk.Scrollbar(
+            left_outer, orient="vertical", command=canvas_scroll.yview
+        )
+        canvas_scroll.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas_scroll.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        params_frame = ttk.Frame(canvas_scroll)
+        canvas_scroll.create_window((0, 0), window=params_frame, anchor="nw")
+
+        def _on_frame_configure(event):
+            canvas_scroll.configure(
+                scrollregion=canvas_scroll.bbox("all")
+            )
+        params_frame.bind("<Configure>", _on_frame_configure)
+
+        # ── file selection ───────────────────────────────────────────────────
+        row = 0
+        ttk.Label(params_frame, text="Single file:").grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        self.ptu_fcs_file = tk.StringVar()
+        e1 = ttk.Entry(params_frame, textvariable=self.ptu_fcs_file, width=32)
+        e1.grid(row=row, column=1, sticky="ew")
+        b1 = ttk.Button(
+            params_frame, text="Browse", width=8,
+            command=self._browse_ptu_fcs_file
+        )
+        b1.grid(row=row, column=2, padx=3)
+        self.register_busy_widget(e1)
+        self.register_busy_widget(b1)
+
+        row += 1
+        ttk.Label(params_frame, text="Batch folder:").grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        self.ptu_fcs_folder = tk.StringVar()
+        e2 = ttk.Entry(params_frame, textvariable=self.ptu_fcs_folder, width=32)
+        e2.grid(row=row, column=1, sticky="ew")
+        b2 = ttk.Button(
+            params_frame, text="Browse",
+            command=self._browse_ptu_fcs_folder
+        )
+        b2.grid(row=row, column=2, padx=3)
+        self.register_busy_widget(e2)
+        self.register_busy_widget(b2)
+
+        # ── mode toggle: standard vs PIE ────────────────────────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        self.ptu_fcs_use_pie = tk.BooleanVar(value=False)
+        self._ptu_pie_checkbox = ttk.Checkbutton(
+            params_frame,
+            text="PIE mode (Pulsed Interleaved Excitation)",
+            variable=self.ptu_fcs_use_pie,
+            command=self._on_ptu_pie_toggle,
+        )
+        self._ptu_pie_checkbox.grid(row=row, column=0, columnspan=3, sticky="w")
+
+        # ── standard mode frame (PTU, no PIE) ────────────────────────────────
+        row += 1
+        self._ptu_std_frame = ttk.LabelFrame(
+            params_frame, text="Standard mode", padding=6
+        )
+        self._ptu_std_frame.grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        sr = 0
+        ttk.Label(self._ptu_std_frame, text="Routing channel:").grid(
+            row=sr, column=0, sticky="w"
+        )
+        self.ptu_fcs_channel = tk.StringVar(value="0")
+        ttk.Combobox(
+            self._ptu_std_frame, textvariable=self.ptu_fcs_channel,
+            values=["0", "1", "2", "3", "4"], width=5
+        ).grid(row=sr, column=1, sticky="w")
+
+        sr += 1
+        ttk.Label(self._ptu_std_frame, text="Gate start (ns):").grid(
+            row=sr, column=0, sticky="w"
+        )
+        self.ptu_fcs_gate_start = tk.StringVar(value="")
+        ttk.Entry(
+            self._ptu_std_frame,
+            textvariable=self.ptu_fcs_gate_start, width=8
+        ).grid(row=sr, column=1, sticky="w")
+
+        sr += 1
+        ttk.Label(self._ptu_std_frame, text="Gate stop (ns):").grid(
+            row=sr, column=0, sticky="w"
+        )
+        self.ptu_fcs_gate_stop = tk.StringVar(value="")
+        ttk.Entry(
+            self._ptu_std_frame,
+            textvariable=self.ptu_fcs_gate_stop, width=8
+        ).grid(row=sr, column=1, sticky="w")
+
+        # ── PIE mode frame ───────────────────────────────────────────────────
+        row += 1
+        self._ptu_pie_frame = ttk.LabelFrame(
+            params_frame, text="PIE mode", padding=6
+        )
+        self._ptu_pie_frame.grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        pr = 0
+        ttk.Label(self._ptu_pie_frame, text="Donor channel:").grid(
+            row=pr, column=0, sticky="w"
+        )
+        self.ptu_pie_donor_ch = tk.StringVar(value="0")
+        ttk.Combobox(
+            self._ptu_pie_frame, textvariable=self.ptu_pie_donor_ch,
+            values=["0", "1", "2", "3", "4"], width=5
+        ).grid(row=pr, column=1, sticky="w")
+
+        pr += 1
+        ttk.Label(self._ptu_pie_frame, text="Acceptor channel:").grid(
+            row=pr, column=0, sticky="w"
+        )
+        self.ptu_pie_acceptor_ch = tk.StringVar(value="1")
+        ttk.Combobox(
+            self._ptu_pie_frame, textvariable=self.ptu_pie_acceptor_ch,
+            values=["0", "1", "2", "3", "4"], width=5
+        ).grid(row=pr, column=1, sticky="w")
+
+        pr += 1
+        ttk.Label(self._ptu_pie_frame,
+                  text="Prompt gate (0–1):").grid(
+            row=pr, column=0, sticky="w"
+        )
+        pg_frame = ttk.Frame(self._ptu_pie_frame)
+        pg_frame.grid(row=pr, column=1, sticky="w")
+        self.ptu_pie_prompt_start = tk.StringVar(value="0.0")
+        self.ptu_pie_prompt_stop  = tk.StringVar(value="0.5")
+        ttk.Entry(pg_frame, textvariable=self.ptu_pie_prompt_start,
+                  width=5).pack(side=tk.LEFT)
+        ttk.Label(pg_frame, text=" – ").pack(side=tk.LEFT)
+        ttk.Entry(pg_frame, textvariable=self.ptu_pie_prompt_stop,
+                  width=5).pack(side=tk.LEFT)
+
+        pr += 1
+        ttk.Label(self._ptu_pie_frame,
+                  text="Delay gate (0–1):").grid(
+            row=pr, column=0, sticky="w"
+        )
+        dg_frame = ttk.Frame(self._ptu_pie_frame)
+        dg_frame.grid(row=pr, column=1, sticky="w")
+        self.ptu_pie_delay_start = tk.StringVar(value="0.5")
+        self.ptu_pie_delay_stop  = tk.StringVar(value="1.0")
+        ttk.Entry(dg_frame, textvariable=self.ptu_pie_delay_start,
+                  width=5).pack(side=tk.LEFT)
+        ttk.Label(dg_frame, text=" – ").pack(side=tk.LEFT)
+        ttk.Entry(dg_frame, textvariable=self.ptu_pie_delay_stop,
+                  width=5).pack(side=tk.LEFT)
+
+        pr += 1
+        self.ptu_pie_symmetric = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self._ptu_pie_frame,
+            text="Symmetric cross-corr (time reversal)",
+            variable=self.ptu_pie_symmetric,
+        ).grid(row=pr, column=0, columnspan=2, sticky="w")
+
+        pr += 1
+        ttk.Separator(
+            self._ptu_pie_frame, orient="horizontal"
+        ).grid(row=pr, column=0, columnspan=2, sticky="ew", pady=4)
+
+        pr += 1
+        ttk.Label(
+            self._ptu_pie_frame,
+            text="FRET corrections",
+            font=("", 9, "bold"),
+        ).grid(row=pr, column=0, columnspan=2, sticky="w")
+
+        for lbl, attr, default in [
+            ("γ factor:",            "ptu_pie_gamma",       "1.0"),
+            ("Crosstalk α:",         "ptu_pie_crosstalk",   "0.0"),
+            ("Direct excitation δ:", "ptu_pie_direct_exc",  "0.0"),
+        ]:
+            pr += 1
+            ttk.Label(self._ptu_pie_frame, text=lbl).grid(
+                row=pr, column=0, sticky="w"
+            )
+            sv = tk.StringVar(value=default)
+            setattr(self, attr, sv)
+            ttk.Entry(
+                self._ptu_pie_frame, textvariable=sv, width=8
+            ).grid(row=pr, column=1, sticky="w")
+
+        # ── Zeiss .raw mode frame ────────────────────────────────────────────
+        row += 1
+        self._ptu_raw_frame = ttk.LabelFrame(
+            params_frame, text="Zeiss .raw mode", padding=6
+        )
+        self._ptu_raw_frame.grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        _raw_ch_values = ["1 - ChS1", "2 - ChS2", "3 - Ch2", "4 - GaAsP1"]
+
+        rr = 0
+        ttk.Label(self._ptu_raw_frame, text="Channel 1:").grid(
+            row=rr, column=0, sticky="w"
+        )
+        self.ptu_raw_ch1 = tk.StringVar(value=_raw_ch_values[3])   # default GaAsP1
+        ttk.Combobox(
+            self._ptu_raw_frame, textvariable=self.ptu_raw_ch1,
+            values=_raw_ch_values, width=12, state="readonly"
+        ).grid(row=rr, column=1, sticky="w")
+
+        rr += 1
+        ttk.Label(self._ptu_raw_frame, text="Channel 2:").grid(
+            row=rr, column=0, sticky="w"
+        )
+        self.ptu_raw_ch2 = tk.StringVar(value=_raw_ch_values[3])   # default: autocorrelation
+        ttk.Combobox(
+            self._ptu_raw_frame, textvariable=self.ptu_raw_ch2,
+            values=_raw_ch_values, width=12, state="readonly"
+        ).grid(row=rr, column=1, sticky="w")
+        ttk.Label(
+            self._ptu_raw_frame,
+            text="(same as Ch 1 = autocorrelation)",
+            foreground="gray",
+        ).grid(row=rr, column=2, sticky="w")
+
+        rr += 1
+        self.ptu_raw_symmetric = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self._ptu_raw_frame,
+            text="Symmetric cross-corr (time reversal)",
+            variable=self.ptu_raw_symmetric,
+        ).grid(row=rr, column=0, columnspan=2, sticky="w")
+
+        rr += 1
+        ttk.Label(self._ptu_raw_frame, text="Segments (Wohland SD):").grid(
+            row=rr, column=0, sticky="w"
+        )
+        self.ptu_raw_n_segments = tk.StringVar(value="6")
+        ttk.Entry(
+            self._ptu_raw_frame, textvariable=self.ptu_raw_n_segments, width=8
+        ).grid(row=rr, column=1, sticky="w")
+        ttk.Label(
+            self._ptu_raw_frame, text="(1 = no SD calc)", foreground="gray"
+        ).grid(row=rr, column=2, sticky="w")
+
+        rr += 1
+        ttk.Label(self._ptu_raw_frame, text="Channel offset (s):").grid(
+            row=rr, column=0, sticky="w"
+        )
+        self.ptu_raw_offset_s = tk.StringVar(value="0.0")
+        ttk.Entry(
+            self._ptu_raw_frame, textvariable=self.ptu_raw_offset_s, width=8
+        ).grid(row=rr, column=1, sticky="w")
+
+        # rr += 1
+        # self.ptu_raw_correct_bleaching = tk.BooleanVar(value=False)
+        # ttk.Checkbutton(
+        #     self._ptu_raw_frame,
+        #     text="Bleach correction (polynomial trend, per-photon weights)",
+        #     variable=self.ptu_raw_correct_bleaching,
+        # ).grid(row=rr, column=0, columnspan=2, sticky="w")
+
+        rr += 1
+        ttk.Label(
+            self._ptu_raw_frame,
+            text="Afterpulsing correction and calibration CSV are shared\n"
+                 "with the sections below (same A1,tau1,A2,tau2 CSV format).",
+            foreground="gray", justify="left",
+        ).grid(row=rr, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        # initial visibility: standard vs PIE (raw frame starts hidden;
+        # it is shown only once a .raw file/folder is actually selected)
+        self._on_ptu_pie_toggle()
+        self._ptu_raw_frame.grid_remove()
+
+        # ── correlation settings ─────────────────────────────────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        ttk.Label(
+            params_frame, text=" Correlation settings ",
+            font=("", 9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+
+        for lbl, attr, default in [
+            ("Tau min (s):",       "ptu_fcs_tau_min",    "1e-6"),
+            ("Tau max (s):",       "ptu_fcs_tau_max",    "1.0"),
+            ("Correlator n_bins:", "ptu_fcs_nbins",      "9"),
+        ]:
+            row += 1
+            ttk.Label(params_frame, text=lbl).grid(
+                row=row, column=0, sticky="w", pady=2
+            )
+            sv = tk.StringVar(value=default)
+            setattr(self, attr, sv)
+            ttk.Entry(params_frame, textvariable=sv, width=10).grid(
+                row=row, column=1, sticky="w"
+            )
+        row += 1
+        ttk.Label(params_frame, text="Cores (batch):").grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        self.ptu_fcs_n_cores = tk.StringVar(value="4")
+        ttk.Entry(
+            params_frame, textvariable=self.ptu_fcs_n_cores, width=10
+        ).grid(row=row, column=1, sticky="w")
+        ttk.Label(
+            params_frame, text="(parallel files)", foreground="gray"
+        ).grid(row=row, column=2, sticky="w")
+        # ── correlation pair selection (DD / AA / DA) ────────────────────────
+        row += 1
+        self._ptu_ddaada_frame = ttk.LabelFrame(
+            params_frame, text="Correlation pairs to compute", padding=6
+        )
+        self._ptu_ddaada_frame.grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        dr = 0
+        ttk.Label(
+            self._ptu_ddaada_frame,
+            text="(only applies to two-channel measurements;\n"
+                 "single-channel files always compute autocorrelation)",
+            foreground="gray", justify="left",
+        ).grid(row=dr, column=0, columnspan=3, sticky="w")
+
+        dr += 1
+        self.ptu_fcs_compute_dd = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self._ptu_ddaada_frame,
+            text="DD  (channel 1 / donor autocorrelation)",
+            variable=self.ptu_fcs_compute_dd,
+        ).grid(row=dr, column=0, columnspan=3, sticky="w")
+
+        dr += 1
+        self.ptu_fcs_compute_aa = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self._ptu_ddaada_frame,
+            text="AA  (channel 2 / acceptor autocorrelation)",
+            variable=self.ptu_fcs_compute_aa,
+        ).grid(row=dr, column=0, columnspan=3, sticky="w")
+
+        dr += 1
+        self.ptu_fcs_compute_da = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self._ptu_ddaada_frame,
+            text="DA  (channel 1 × channel 2 cross-correlation)",
+            variable=self.ptu_fcs_compute_da,
+        ).grid(row=dr, column=0, columnspan=3, sticky="w")
+        # ── Wohland SD settings ──────────────────────────────────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        ttk.Label(
+            params_frame, text=" Uncertainty (Wohland SD) ",
+            font=("", 9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Window (s):").grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        self.ptu_fcs_wohland_window = tk.StringVar(value="")
+        ttk.Entry(
+            params_frame,
+            textvariable=self.ptu_fcs_wohland_window, width=10
+        ).grid(row=row, column=1, sticky="w")
+        ttk.Label(
+            params_frame, text="(blank=auto)", foreground="gray"
+        ).grid(row=row, column=2, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Bootstrap reps:").grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        self.ptu_fcs_n_bootstrap = tk.StringVar(value="20")
+        ttk.Entry(
+            params_frame,
+            textvariable=self.ptu_fcs_n_bootstrap, width=6
+        ).grid(row=row, column=1, sticky="w")
+
+        # ── afterpulsing (shared between PTU and .raw modes) ────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        ttk.Label(
+            params_frame, text=" Afterpulsing correction ",
+            font=("", 9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+
+        row += 1
+        self.ptu_fcs_use_ap = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            params_frame,
+            text="Subtract afterpulsing",
+            variable=self.ptu_fcs_use_ap,
+            command=self._on_ptu_ap_toggle,
+        ).grid(row=row, column=0, columnspan=2, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Calibration CSV:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.ptu_fcs_ap_path  = tk.StringVar(value="")
+        self.ptu_fcs_ap_entry = ttk.Entry(
+            params_frame, textvariable=self.ptu_fcs_ap_path,
+            width=28, state="disabled"
+        )
+        self.ptu_fcs_ap_entry.grid(row=row, column=1, sticky="ew")
+        self.ptu_fcs_ap_btn = ttk.Button(
+            params_frame, text="Browse",
+            command=self._browse_ptu_ap_file, state="disabled"
+        )
+        self.ptu_fcs_ap_btn.grid(row=row, column=2, padx=3)
+        # ── bleach / drift correction (shared: PTU polynomial undrifting
+        # via FCS_Fixer, .raw polynomial bleach weights via
+        # zeiss_raw_correlate.get_blcorr_weights) ───────────────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        ttk.Label(
+            params_frame, text=" Bleach / drift correction ",
+            font=("", 9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+
+        row += 1
+        self.ptu_fcs_correct_bleaching = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            params_frame,
+            text="Apply bleach/drift correction (auto polynomial trend)",
+            variable=self.ptu_fcs_correct_bleaching,
+        ).grid(row=row, column=0, columnspan=2, sticky="w")
+        # ── burst removal ────────────────────────────────────────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        ttk.Label(
+            params_frame, text=" Burst removal ",
+            font=("", 9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+
+        row += 1
+        self.ptu_fcs_use_burst_removal = tk.BooleanVar(value=False)
+        self._ptu_burst_removal_checkbox = ttk.Checkbutton(   # CHANGED: store reference
+            params_frame,
+            text="Remove bursts (auto-thresholded, per channel)",
+            variable=self.ptu_fcs_use_burst_removal,
+        )
+        self._ptu_burst_removal_checkbox.grid(row=row, column=0, columnspan=2, sticky="w")
+
+        row += 1
+        ttk.Label(params_frame, text="Threshold alpha:").grid(
+            row=row, column=0, sticky="w"
+        )
+        self.ptu_fcs_burst_threshold_alpha = tk.StringVar(value="0.02")
+        ttk.Entry(
+            params_frame, textvariable=self.ptu_fcs_burst_threshold_alpha, width=10
+        ).grid(row=row, column=1, sticky="w")
+        ttk.Label(
+            params_frame, text="(lower = fewer bursts flagged)", foreground="gray"
+        ).grid(row=row, column=2, sticky="w")
+        # ── FLCS (PTU only) ──────────────────────────────────────────────────
+        row += 1
+        ttk.Separator(params_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=6
+        )
+        row += 1
+        ttk.Label(
+            params_frame, text=" FLCS background correction ",
+            font=("", 9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+
+        row += 1
+        self.ptu_fcs_use_flcs = tk.BooleanVar(value=False)
+        self._ptu_flcs_checkbox = ttk.Checkbutton(
+            params_frame,
+            text="Apply FLCS background correction",
+            variable=self.ptu_fcs_use_flcs,
+        )
+        self._ptu_flcs_checkbox.grid(row=row, column=0, columnspan=2, sticky="w")
+
+        row += 1
+        btn_frame = ttk.Frame(params_frame)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+
+        self.ptu_fcs_run_btn = ttk.Button(
+            btn_frame, text="Run Correlation",
+            command=self._run_ptu_fcs
+        )
+        self.ptu_fcs_run_btn.pack(side=tk.LEFT, padx=5)
+        self.register_busy_widget(self.ptu_fcs_run_btn)
+
+        # ── right panel: display ──────────────────────────────────────────────
+        display_frame = ttk.LabelFrame(
+            ptu_frame, text="Correlation Display", padding=10
+        )
+        display_frame.pack(
+            side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5
+        )
+
+        self.ptu_fcs_fig    = Figure(figsize=(9, 7), dpi=100, facecolor="white")
+        self.ptu_fcs_canvas = FigureCanvasTkAgg(self.ptu_fcs_fig, display_frame)
+        self.ptu_fcs_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(self.ptu_fcs_canvas, display_frame)
+        toolbar.update()
+
+
+    # ── PIE toggle ────────────────────────────────────────────────────────────────
+
+    def _on_ptu_pie_toggle(self):
+        """Show/hide the standard vs PIE parameter sections."""
+        if self.ptu_fcs_use_pie.get():
+            self._ptu_std_frame.grid_remove()
+            self._ptu_pie_frame.grid()
+        else:
+            self._ptu_pie_frame.grid_remove()
+            self._ptu_std_frame.grid()
+
+
+    # ── browse helpers ────────────────────────────────────────────────────────────
+
+    def _browse_ptu_fcs_file(self):
+        fn = self._ask_open_filename(
+            title="Select PTU or RAW file",
+            filetypes=[
+                ("Supported files", "*.ptu *.raw"),
+                ("PicoQuant PTU",   "*.ptu"),
+                ("Zeiss RAW",       "*.raw"),
+                ("All files",       "*.*"),
+            ],
+        )
+        if fn:
+            self.ptu_fcs_file.set(fn)
+            self._on_ptu_input_type_detected(is_raw=fn.lower().endswith(".raw"))
+
+
+    def _browse_ptu_fcs_folder(self):
+        folder = self._ask_directory(title="Select batch folder")
+        if folder:
+            self.ptu_fcs_folder.set(folder)
+            self._detect_and_apply_ptu_input_type_folder(folder)
+
+
+    def _detect_and_apply_ptu_input_type_folder(self, folder):
+        """
+        Peek into the selected batch folder to decide whether PIE/FLCS
+        should remain available. If the folder contains ONLY .raw files,
+        PIE/FLCS are disabled (not available for .raw). If it contains any
+        .ptu files (with or without .raw mixed in), PIE/FLCS stay available
+        -- individual .raw files within a mixed batch will simply fail with
+        a clear "not yet implemented" message without affecting .ptu files.
+        """
+        import glob
+        ptu_files = glob.glob(os.path.join(folder, "**", "*.ptu"), recursive=True)
+        raw_files = glob.glob(os.path.join(folder, "**", "*.raw"), recursive=True)
+
+        if raw_files and not ptu_files:
+            self._on_ptu_input_type_detected(is_raw=True)
+        else:
+            self._on_ptu_input_type_detected(is_raw=False)
+            if ptu_files and raw_files:
+                self.log_message(
+                    f"Batch folder contains both .ptu ({len(ptu_files)}) and "
+                    f".raw ({len(raw_files)}) files. Both will be processed; "
+                    f".raw files will report 'not yet implemented' until that "
+                    f"pipeline is added."
+                )
+
+
+    def _on_ptu_input_type_detected(self, is_raw: bool):
+        """
+        Enable/disable PIE mode and FLCS background correction, and switch
+        the channel-selection frame between PTU-style (routing channel +
+        optional micro-time gate / PIE donor-acceptor) and Zeiss .raw-style
+        (named LSM980 channel pair: ChS1/ChS2/Ch2/GaAsP1), based on whether
+        the selected input is a Zeiss .raw file (no TCSPC micro-time
+        information) or a PTU file (full TCSPC/PIE support).
+
+        Also hides the DD/AA/DA correlation-pair-selection frame entirely
+        in .raw mode, since .raw files always specify their channel pairing
+        explicitly via the Channel 1 / Channel 2 comboboxes in
+        _ptu_raw_frame -- DD/AA/DA would be redundant there.
+        """
+        if is_raw:
+            self.ptu_fcs_use_pie.set(False)
+            self.ptu_fcs_use_flcs.set(False)
+            self.ptu_fcs_use_burst_removal.set(False)
+            try:
+                self._ptu_pie_checkbox.configure(state="disabled")
+            except Exception:
+                pass
+            try:
+                self._ptu_flcs_checkbox.configure(state="disabled")
+            except Exception:
+                pass
+            try:                                         # NEW
+                self._ptu_burst_removal_checkbox.configure(state="disabled")
+            except Exception:
+                pass
+
+            # hide both PTU-style frames, show the .raw frame
+            self._ptu_std_frame.grid_remove()
+            self._ptu_pie_frame.grid_remove()
+            self._ptu_raw_frame.grid()
+
+            # NEW: DD/AA/DA is a PTU-only concept -- hide it in .raw mode
+            self._ptu_ddaada_frame.grid_remove()
+
+            self.log_message(
+                "Zeiss .raw file selected -- PIE mode, FLCS background "
+            "correction, and burst removal are not available for .raw "   
+            "files (no TCSPC micro-time information for FLCS; burst "
+            "removal for .raw files has not been implemented yet). "
+            "Only ACF/CCF with Wohland SD, afterpulsing subtraction, "
+            "and bleach/drift correction will be computed."
+            )
+        else:
+            try:
+                self._ptu_pie_checkbox.configure(state="normal")
+            except Exception:
+                pass
+            try:
+                self._ptu_flcs_checkbox.configure(state="normal")
+            except Exception:
+                pass
+            try:                                         # NEW
+                self._ptu_burst_removal_checkbox.configure(state="normal")
+            except Exception:
+                pass
+
+            # hide the .raw frame, restore whichever PTU-style frame matches
+            # the current PIE checkbox state
+            self._ptu_raw_frame.grid_remove()
+            self._on_ptu_pie_toggle()
+
+            # NEW: restore DD/AA/DA selection frame for PTU mode
+            self._ptu_ddaada_frame.grid()
+    def _parse_raw_channel(self, combo_value: str) -> int:
+        """Parse '1 - ChS1' style strings from the Zeiss .raw channel
+        comboboxes into the plain integer channel index (1-4)."""
+        try:
+            return int(combo_value.split("-")[0].strip())
+        except Exception:
+            return 1
+
+    def _browse_ptu_ap_file(self):
+        fn = self._ask_open_filename(
+            title="Select afterpulsing calibration CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if fn:
+            self.ptu_fcs_ap_path.set(fn)
+
+
+    def _on_ptu_ap_toggle(self):
+        if self.ptu_fcs_use_ap.get():
+            self.ptu_fcs_ap_entry.configure(state="normal")
+            self.ptu_fcs_ap_btn.configure(state="normal")
+        else:
+            self.ptu_fcs_ap_entry.configure(state="disabled")
+            self.ptu_fcs_ap_btn.configure(state="disabled")      
     def create_fcs_fit_tab(self):
+        from theatrics.workers.fcsfit_worker import fcsfit_process_main
+        self._fcsfit_process_main = fcsfit_process_main
+        from theatrics.fcsfit import calculations as calculate
+        self._calculate = calculate
         fcs_frame = ttk.Frame(self.notebook)
         self.notebook.add(fcs_frame, text="FCS Fitting")
 
@@ -587,7 +1386,7 @@ class ModularRICSGUI:
         else:
             self.fcsfit_calib_frame.grid_remove()
     def browse_fcsfit_csv(self):
-        fn = filedialog.askopenfilename(
+        fn = self._ask_open_filename(
             title="Select FCS correlation CSV",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
@@ -595,11 +1394,15 @@ class ModularRICSGUI:
             self.fcsfit_csv.set(fn)
 
     def browse_fcsfit_folder(self):
-        folder = filedialog.askdirectory(title="Select folder containing correlation CSVs")
+        folder = self._ask_directory(title="Select folder containing correlation CSVs")
         if folder:
             self.fcsfit_folder.set(folder)
 
     def create_frap_tab(self):
+        from theatrics.workers.frap_worker import frap_process_main
+        self._frap_process_main = frap_process_main
+        from theatrics.frap import analysis as frap_analysis
+        self._frap_analysis = frap_analysis
         frap_frame = ttk.Frame(self.notebook)
         self.notebook.add(frap_frame, text="FRAP")
 
@@ -697,7 +1500,7 @@ class ModularRICSGUI:
 
 
     def browse_frap_czi(self):
-        fn = filedialog.askopenfilename(
+        fn = self._ask_open_filename(
             title="Select FRAP CZI file",
             filetypes=[("CZI files", "*.czi"), ("All files", "*.*")]
         )
@@ -706,7 +1509,7 @@ class ModularRICSGUI:
 
 
     def browse_frap_folder(self):
-        folder = filedialog.askdirectory(title="Select FRAP batch folder")
+        folder = self._ask_directory(title="Select FRAP batch folder")
         if folder:
             self.frap_folder.set(folder)
 
@@ -721,6 +1524,10 @@ class ModularRICSGUI:
 
     def create_fitting_tab(self):
         """Create the fitting tab using rics_fit module"""
+        from theatrics.workers.fit_worker import fit_rics_process_main
+        self._fit_rics_process_main = fit_rics_process_main
+        from theatrics.workers.diffmap_worker import diffusion_map_process_main
+        self._diffusion_map_process_main = diffusion_map_process_main
         fit_frame = ttk.Frame(self.notebook)
         self.notebook.add(fit_frame, text="RICS Fitting")
 
@@ -795,7 +1602,7 @@ class ModularRICSGUI:
         ttk.Label(diff_fit_params, text="Channel").grid(row=row, column=0, sticky='w', pady=2)
         self.channel_to_use_diff_map = tk.StringVar(value=0)
         model_combo = ttk.Combobox(diff_fit_params, textvariable=self.channel_to_use_diff_map, 
-                                   values=[0,1], width=12)
+                                   values=[0,4], width=12)
         model_combo.grid(row=row, column=1, pady=2)
         
         row += 1
@@ -839,7 +1646,7 @@ class ModularRICSGUI:
         ttk.Label(fit_params, text="Channel").grid(row=row, column=0, sticky='w', pady=2)
         self.channel_to_use = tk.StringVar(value=0)
         model_combo = ttk.Combobox(fit_params, textvariable=self.channel_to_use, 
-                                   values=[0,1], width=12)
+                                   values=[0,4], width=12)
         model_combo.grid(row=row, column=1, pady=2)
         
 
@@ -911,7 +1718,7 @@ class ModularRICSGUI:
 
     def browse_output_path(self):
         """Browse for output path"""
-        filename = filedialog.asksaveasfilename(
+        filename = self._ask_saveas_filename(
             title="Select output file",
             defaultextension=".tif",
             filetypes=[("TIFF files", "*.tif"), ("All files", "*.*")]
@@ -921,23 +1728,38 @@ class ModularRICSGUI:
 
     def browse_input_file(self):
         """Browse for input file"""
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Select input image stack",
-            filetypes=[("All files", "*.*"), ("CZI files", "*.czi"),("TIFF files", "*.tif") ]
+            filetypes=[
+                ("All supported files", "*.czi *.tif *.tiff *.ptu"),
+                ("CZI files",           "*.czi"),
+                ("TIFF files",          "*.tif *.tiff"),
+                ("PTU files",           "*.ptu"),
+                ("All files",           "*.*"),
+            ]
         )
         if filename:
             self.input_file.set(filename)
 
     def browse_sfcs_input_file(self):
-        """Browse for input file"""
-        filename = filedialog.askopenfilename(
-            title="Select input image stack",
-            filetypes=[("All files", "*.*"), ("CZI files", "*.czi"),("TIFF files", "*.tif") ]
+        """Browse for SFCS input file"""
+        filename = self._ask_open_filename(
+            title="Select input line-scan file",
+            filetypes=[
+                ("All supported files", "*.czi *.ptu"),
+                ("CZI files",           "*.czi"),
+                ("PTU files",           "*.ptu"),
+                ("All files",           "*.*"),
+            ]
         )
         if filename:
             self.sfcs_input_file.set(filename)
+
+            # for PTU files: log metadata so user can verify
+            if filename.lower().endswith(".ptu"):
+                self._log_ptu_linescan_metadata(filename)
     def browse_save_path(self):
-        filename = filedialog.asksaveasfilename(
+        filename = self._ask_saveas_filename(
             title="Select output file",
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
@@ -945,14 +1767,14 @@ class ModularRICSGUI:
         if filename:
             self.saving_path.set(filename)
     def browse_batch_input_folder(self):
-        filepath = filedialog.askdirectory(
+        filepath = self._ask_directory(
             title="Select directory for batch input",
         )
         if filepath:
             self.batch_input_folder.set(filepath)
 
     def browse_batch_fit_folder(self):
-        filepath = filedialog.askdirectory(
+        filepath = self._ask_directory(
             title="Select directory for batch input",
         )
         if filepath:
@@ -960,31 +1782,36 @@ class ModularRICSGUI:
 
     def browse_input_file_diff_map(self):
         """Browse for input file"""
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Select input image stack",
-            filetypes=[("All files", "*.*"), ("CZI files", "*.czi"),("TIFF files", "*.tif") ]
+            filetypes=[
+                ("All supported files", "*.czi *.tif *.tiff *.ptu"),
+                ("CZI files",           "*.czi"),
+                ("TIFF files",          "*.tif *.tiff"),
+                ("PTU files",           "*.ptu"),
+                ("All files",           "*.*"),
+            ]
         )
         if filename:
             self.input_file_diff_map.set(filename)
     def browse_rics_file(self):
         """Browse for RICS map file"""
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Select RICS map file",
             filetypes=[("TIFF files", "*.tif"), ("All files", "*.*")]
         )
         if filename:
             self.rics_file.set(filename)
-    
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------Simulation RICS GUI-------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------           
 
     def run_simulation(self):
         if self._is_worker_running("sim_proc"):
-            messagebox.showwarning("Warning", "Simulation is already running.")
+            self._showwarning("Warning", "Simulation is already running.")
             return
         if not self.output_path.get():
-            messagebox.showwarning("Warning", "Please set an output path.")
+            self._showwarning("Warning", "Please set an output path.")
             return
 
         
@@ -1030,7 +1857,7 @@ class ModularRICSGUI:
         self.sim_cancel_event = multiprocessing.Event()
 
         self.sim_proc = multiprocessing.Process(
-            target=simulate_rics_process_main,
+            target=self._simulate_rics_process_main,
             args=(params, self.sim_queue, self.sim_cancel_event),
             daemon=False
         )
@@ -1087,7 +1914,7 @@ class ModularRICSGUI:
 
     def load_simulation(self):
         """Load existing simulation"""
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Select simulation file",
             filetypes=[("TIFF files", "*.tif"), ("All files", "*.*")]
         )
@@ -1212,13 +2039,62 @@ class ModularRICSGUI:
             return
 
         self.root.after(50, self._poll_sfcs_queue)
+    
+    def _log_ptu_linescan_metadata(self, filepath: str):
+        """
+        Read and log PTU line-scan metadata so the user can verify
+        timing parameters before running SFCS.
+        """
+        try:
+            from theatrics.modules.SFCS_module import (
+                read_ptu_linescan_metadata,
+                TTTRLIB_AVAILABLE,
+            )
+            if not TTTRLIB_AVAILABLE:
+                self.log_message(
+                    "WARNING: tttrlib not installed — "
+                    "PTU files cannot be read. "
+                    "Install with:  pip install tttrlib"
+                )
+                return
+
+            meta = read_ptu_linescan_metadata(filepath)
+
+            self.log_message("PTU line-scan metadata:")
+            self.log_message(
+                f"  Pixel dwell time : {meta['pixel_dwell_time_us']:.4f} µs"
+            )
+            self.log_message(
+                f"  Line time        : {meta['line_time_ms']:.4f} ms"
+            )
+            self.log_message(
+                f"  Lines            : {meta['n_lines']}"
+            )
+            self.log_message(
+                f"  Pixels per line  : {meta['n_pixels']}"
+            )
+            self.log_message(
+                f"  Total duration   : {meta['total_duration_s']:.2f} s"
+            )
+            self.log_message(
+                f"  Photon channels  : {meta['photon_channels']}"
+            )
+            self.log_message(
+                f"  Line-start marker channel : {meta['line_start_channel']}"
+            )
+
+        except Exception as e:
+            self.log_message(
+                f"WARNING: could not read PTU line-scan metadata: {e}"
+            )
+
     def run_SFCS(self):
         if self._is_worker_running("sfcs_proc"):
-            messagebox.showwarning("Warning", "SFCS is already running.")
+            self._showwarning("Warning", "SFCS is already running.")
             return
 
         if not self.sfcs_input_file.get():
-            messagebox.showwarning("Warning", "Please select an input file first")
+            self._showwarning("Warning", "Please select an input file first")
             return
 
         self.log_message("Starting SFCS...")
@@ -1236,7 +2112,7 @@ class ModularRICSGUI:
 
         # non-daemon is REQUIRED because worker will create a Pool
         self.sfcs_proc = multiprocessing.Process(
-            target=sfcs_process_main_curvefit,
+            target=self._sfcs_process_main_curvefit,
             args=(self.sfcs_input_file.get(), int(self.sfcs_channel.get()), cpu_n, self.sfcs_queue, self.sfcs_cancel_event, self.correct_bleach.get()),
             kwargs=dict(chunk_lines=500, max_workers=64),  # tune these
             daemon=False
@@ -1402,14 +2278,87 @@ class ModularRICSGUI:
             return
 
         self.root.after(50, self._poll_export_queue)
-    
+
+    def _read_ptu_timing_to_gui(self, filepath: str):
+        """
+        Read pixel size, dwell time, and line time from a PTU file
+        and populate the corresponding fitting parameter fields.
+        Called automatically after a PTU file is selected for RICS export.
+        """
+        try:
+            from theatrics.modules.export_rics import (
+                read_ptu_metadata,
+                TTTRLIB_AVAILABLE,
+            )
+            if not TTTRLIB_AVAILABLE:
+                self.log_message(
+                    "WARNING: tttrlib not installed — "
+                    "PTU metadata cannot be read. "
+                    "Install with:  pip install tttrlib"
+                )
+                return
+
+            meta = read_ptu_metadata(filepath)
+
+            if meta["pixel_size_nm"] is not None:
+                self.fit_pixel_size.set(
+                    f"{meta['pixel_size_nm']:.4f}"
+                )
+                self.log_message(
+                    f"PTU pixel size: {meta['pixel_size_nm']:.4f} nm"
+                )
+            else:
+                self.log_message(
+                    "PTU metadata: pixel size not found in header"
+                )
+
+            if meta["pixel_dwell_time_us"] is not None:
+                self.fit_pixel_dwell.set(
+                    f"{meta['pixel_dwell_time_us']:.4f}"
+                )
+                self.log_message(
+                    f"PTU pixel dwell time: "
+                    f"{meta['pixel_dwell_time_us']:.4f} µs"
+                )
+            else:
+                self.log_message(
+                    "PTU metadata: pixel dwell time not found in header"
+                )
+
+            if meta["line_time_ms"] is not None:
+                self.fit_line_time.set(
+                    f"{meta['line_time_ms']:.4f}"
+                )
+                self.log_message(
+                    f"PTU line time: {meta['line_time_ms']:.4f} ms"
+                )
+            else:
+                self.log_message(
+                    "PTU metadata: line time not found in header"
+                )
+
+            ch = meta.get("channels", [])
+            self.log_message(
+                f"PTU available channels: {ch}"
+            )
+            self.log_message(
+                f"PTU frames: {meta['n_frames']}  "
+                f"lines: {meta['n_lines']}  "
+                f"pixels: {meta['n_pixels']}"
+            )
+
+        except Exception as e:
+            self.log_message(
+                f"WARNING: could not read PTU metadata: {e}"
+            )
+
     def export_rics(self):
         if self._is_worker_running("export_proc"):
-            messagebox.showwarning("Warning", "RICS export is already running.")
+            self._showwarning("Warning", "RICS export is already running.")
             return
         """Export RICS map using export worker (process-based)."""
         if not self.input_file.get() and not self.batch_input_folder.get():
-            messagebox.showwarning("Warning", "Please select an input file or a folder for batch processing")
+            self._showwarning("Warning", "Please select an input file or a folder for batch processing")
             return
 
         # Batch mode (optional: see next section)
@@ -1438,7 +2387,7 @@ class ModularRICSGUI:
 
 
         self.export_proc = multiprocessing.Process(
-            target=export_rics_process_main,
+            target=self._export_rics_process_main,
             args=(params, self.export_queue, self.export_cancel_event),
             daemon=False
         )
@@ -1495,15 +2444,29 @@ class ModularRICSGUI:
         self.root.after(50, self._poll_export_queue_batch)
 
     def _start_export_rics_batch(self):
-        files = get_files_from_folder(self.batch_input_folder.get(), ".czi", "")
+        # collect both CZI and PTU files
+        czi_files = get_files_from_folder(
+            self.batch_input_folder.get(), ".czi", ""
+        )
+        ptu_files = get_files_from_folder(
+            self.batch_input_folder.get(), ".ptu", ""
+        )
+        files = czi_files + ptu_files
+
         if not files:
-            messagebox.showwarning("Warning", "No .czi files found in the selected folder.")
+            self._showwarning(
+                "Warning",
+                "No .czi or .ptu files found in the selected folder."
+            )
             return
 
         self._batch_export_files = files
         self._batch_export_index = 0
 
-        self.log_message(f"Starting batch RICS export for {len(files)} files...")
+        self.log_message(
+            f"Starting batch RICS export for {len(files)} files "
+            f"({len(czi_files)} CZI, {len(ptu_files)} PTU)..."
+        )
         self.status_var.set("Batch exporting RICS...")
         self.progress_var.set(0.0)
         self.progress_bar.grid()
@@ -1533,7 +2496,7 @@ class ModularRICSGUI:
         self.export_queue = multiprocessing.Queue()
         self.export_cancel_event = multiprocessing.Event()
         self.export_proc = multiprocessing.Process(
-            target=export_rics_process_main,
+            target=self._export_rics_process_main,
             args=(params, self.export_queue,self.export_cancel_event),
             daemon=False
         )
@@ -1624,7 +2587,7 @@ class ModularRICSGUI:
 
     def load_rics(self):
         """Load existing RICS map"""
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Select RICS map file",
             filetypes=[("TIFF files", "*.tif"), ("All files", "*.*")]
         )
@@ -1652,7 +2615,7 @@ class ModularRICSGUI:
 
     def run_fitting(self):
         if self._is_worker_running("fit_proc"):
-            messagebox.showwarning("Warning", "RICS fitting is already running.")
+            self._showwarning("Warning", "RICS fitting is already running.")
             return
 
         if not self.rics_file.get() and not self.batch_fit_folder.get():
@@ -1690,7 +2653,7 @@ class ModularRICSGUI:
         self.fit_cancel_event = multiprocessing.Event()
 
         self.fit_proc = multiprocessing.Process(
-            target=fit_rics_process_main,
+            target=self._fit_rics_process_main,
             args=(params, self.fit_queue, self.fit_cancel_event),
             daemon=False
         )
@@ -1744,7 +2707,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.log_message(payload)
                     self.progress_bar.grid_remove()
-                    messagebox.showerror("Fitting Error", "Fitting failed. See log.")
+                    self._showerror("Fitting Error", "Fitting failed. See log.")
                     return
 
         except queue.Empty:
@@ -1984,6 +2947,573 @@ class ModularRICSGUI:
             self.fit_fig.tight_layout()
 
             self.fit_canvas.draw()
+
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------FCS Export GUI-------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
+    def _run_ptu_fcs(self):
+        if self._is_worker_running("ptu_fcs_proc"):
+            self._showwarning(
+                "Warning", "PTU correlation is already running."
+            )
+            return
+
+        single = self.ptu_fcs_file.get().strip()
+        folder = self.ptu_fcs_folder.get().strip()
+
+        if not single and not folder:
+            self._showwarning(
+                "Warning", "Select a single PTU/RAW file or a batch folder."
+            )
+            return
+
+        is_raw_single = single.lower().endswith(".raw") if single else False
+
+        # PIE / FLCS are forced off for .raw input regardless of checkbox
+        # state (defence in depth -- the checkboxes are also disabled by
+        # _on_ptu_input_type_detected(), but this guards against stale state)
+        use_pie      = bool(self.ptu_fcs_use_pie.get())  and not is_raw_single
+        use_flcs_bg  = bool(self.ptu_fcs_use_flcs.get()) and not is_raw_single
+        use_burst_removal = bool(self.ptu_fcs_use_burst_removal.get()) and not is_raw_single
+
+        ww_str = self.ptu_fcs_wohland_window.get().strip()
+        wohland_window = float(ww_str) if ww_str else None
+
+        params = dict(
+        use_pie           = use_pie,
+        tau_min_s         = self._safe_float(
+                                self.ptu_fcs_tau_min,  "Tau min",    1e-6),
+        tau_max_s         = self._safe_float(
+                                self.ptu_fcs_tau_max,  "Tau max",    1.0),
+        n_bins            = self._safe_int(
+                                self.ptu_fcs_nbins,    "n_bins",     9),
+        use_afterpulsing  = bool(self.ptu_fcs_use_ap.get()),
+        ap_params_path    = self.ptu_fcs_ap_path.get().strip(),
+        use_flcs_bg       = use_flcs_bg,
+        wohland_window_s  = wohland_window,
+        n_bootstrap       = self._safe_int(
+                                self.ptu_fcs_n_bootstrap, "Bootstrap", 20),
+        )
+
+        # NEW: DD/AA/DA selection only meaningful for PTU files -- the .raw
+        # pipeline (run_fcs_export_raw) always uses the explicit Channel 1 /
+        # Channel 2 pairing from _ptu_raw_frame instead, so these keys are
+        # simply omitted when the .raw frame is the active one.
+        is_raw_mode = bool(self._ptu_raw_frame.winfo_ismapped())
+        if not is_raw_mode:
+            params["compute_dd"] = bool(self.ptu_fcs_compute_dd.get())
+            params["compute_aa"] = bool(self.ptu_fcs_compute_aa.get())
+            params["compute_da"] = bool(self.ptu_fcs_compute_da.get())
+
+        if use_pie:
+            params.update(
+                donor_channel     = self._safe_int(
+                                        self.ptu_pie_donor_ch,    "Donor ch",    0),
+                acceptor_channel  = self._safe_int(
+                                        self.ptu_pie_acceptor_ch, "Acceptor ch", 1),
+                prompt_gate       = [
+                    self._safe_float(self.ptu_pie_prompt_start, "Prompt start", 0.0),
+                    self._safe_float(self.ptu_pie_prompt_stop,  "Prompt stop",  0.5),
+                ],
+                delay_gate        = [
+                    self._safe_float(self.ptu_pie_delay_start, "Delay start", 0.5),
+                    self._safe_float(self.ptu_pie_delay_stop,  "Delay stop",  1.0),
+                ],
+                symmetric_cc      = bool(self.ptu_pie_symmetric.get()),
+                gamma             = self._safe_float(
+                                        self.ptu_pie_gamma,       "Gamma",       1.0),
+                crosstalk         = self._safe_float(
+                                        self.ptu_pie_crosstalk,   "Crosstalk",   0.0),
+                direct_excitation = self._safe_float(
+                                        self.ptu_pie_direct_exc,  "Dir. exc.",   0.0),
+            )
+        else:
+            ch = self._safe_int(self.ptu_fcs_channel, "Channel", 0)
+
+            gs_str = self.ptu_fcs_gate_start.get().strip()
+            ge_str = self.ptu_fcs_gate_stop.get().strip()
+
+            if gs_str and ge_str:
+                gate_start_ns = float(gs_str)
+                gate_stop_ns  = float(ge_str)
+                params["cs1"]           = None
+                params["cs2"]           = None
+                params["channel"]       = ch
+                params["gate_start_ns"] = gate_start_ns
+                params["gate_stop_ns"]  = gate_stop_ns
+            else:
+                params["cs1"]     = None
+                params["cs2"]     = None
+                params["channel"] = ch
+        # ── NEW: always build Zeiss .raw-specific params too, regardless of
+        # whether the current selection is actually a .raw file. These are
+        # silently ignored by run_fcs_export() (the PTU pipeline) via its
+        # **_ignored_kwargs catch-all, and are the ONLY params actually used
+        # by run_fcs_export_raw(). This lets a single params dict safely
+        # support single-file mode (of either type) and mixed-type batch
+        # folders without needing to know the file type at build time.
+        ch1_raw = self._parse_raw_channel(self.ptu_raw_ch1.get())
+        ch2_raw = self._parse_raw_channel(self.ptu_raw_ch2.get())
+        params["channels_pairs"]    = [(ch1_raw, ch2_raw)]
+        params["n_segments"]       = self._safe_int(
+                                        self.ptu_raw_n_segments, "Segments", 6)
+        params["offset_s"]         = self._safe_float(
+                                        self.ptu_raw_offset_s, "Offset (s)", 0.0)
+        params["correct_bleaching"] = bool(self.ptu_fcs_correct_bleaching.get())
+        params["use_burst_removal"] = bool(self.ptu_fcs_use_burst_removal.get())
+        params["burst_threshold_alpha"] = self._safe_float(self.ptu_fcs_burst_threshold_alpha, "Burst threshold α", 0.02)
+        if single:
+            params["mode"]     = "single"
+            params["filepath"] = single
+        else:
+            import glob
+            ptu_paths = glob.glob(os.path.join(folder, "**", "*.ptu"), recursive=True)
+            raw_paths = glob.glob(os.path.join(folder, "**", "*.raw"), recursive=True)
+            filepaths = sorted(ptu_paths + raw_paths)
+
+            if not filepaths:
+                self._showwarning(
+                    "Warning", "No PTU or RAW files found in the selected folder."
+                )
+                return
+
+            params["mode"]      = "batch"
+            params["filepaths"] = filepaths
+            params["cpu_n"]     = clamp_workers(
+                self.ptu_fcs_n_cores.get(), max_fraction=0.8, hard_cap=64
+            )
+
+        mode_label = "PIE" if use_pie else "standard"
+        self.log_message(
+            f"Starting FCS export ({mode_label}, "
+            f"{'single' if single else 'batch'}) ..."
+        )
+        if not single:
+            self.log_message(
+                f"Batch: {len(params['filepaths'])} file(s), "
+                f"using {params['cpu_n']} parallel worker(s)."
+            )
+
+        self.status_var.set("Running FCS export...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        self.ptu_fcs_queue        = multiprocessing.Queue()
+        self.ptu_fcs_cancel_event = multiprocessing.Event()
+
+        self.ptu_fcs_proc = multiprocessing.Process(
+            target=self._ptu_correlate_worker_main,
+            args=(params, self.ptu_fcs_queue, self.ptu_fcs_cancel_event),
+            daemon=False,
+        )
+        self.ptu_fcs_proc.start()
+        self._poll_ptu_fcs_queue()
+
+
+# ── queue polling ─────────────────────────────────────────────────────────────
+
+    def _poll_ptu_fcs_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.ptu_fcs_queue.get_nowait()
+
+                if msg_type == "progress":
+                    self.set_ui_busy(True)
+                    self.progress_var.set(float(payload))
+
+                elif msg_type == "file_done":
+                    self._update_ptu_fcs_display(payload)
+                    n_ok = len(payload.get("results", []))
+                    self.log_message(
+                        f"Done: {n_ok} curve(s) from "
+                        f"{os.path.basename(payload.get('results', [{}])[0].get('csv_path', ''))}"
+                    )
+
+                elif msg_type == "file_error":
+                    self.log_message(payload)
+
+                elif msg_type == "done":
+                    # single-file result dict has key "results"
+                    if isinstance(payload, dict) and "results" in payload:
+                        self._update_ptu_fcs_display(payload)
+                        self._log_ptu_result(payload)
+                    else:
+                        # batch summary
+                        self.log_message(
+                            f"PTU batch done — "
+                            f"{payload.get('n_ok')}/{payload.get('n_total')} succeeded"
+                        )
+                        if payload.get("last_res"):
+                            self._update_ptu_fcs_display(payload["last_res"])
+                            self._log_ptu_result(payload["last_res"])
+
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    return
+
+                elif msg_type == "cancelled":
+                    self.log_message("PTU FCS cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "error":
+                    self.log_message(payload)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    self._showerror(
+                        "PTU FCS Error", "Correlation failed. See log."
+                    )
+                    return
+
+        except queue.Empty:
+            pass
+
+        if (
+            self.ptu_fcs_proc is not None
+            and not self.ptu_fcs_proc.is_alive()
+        ):
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("PTU FCS worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_ptu_fcs_queue)
+
+
+    def _log_ptu_result(self, res: dict):
+        """Write a summary of a completed PTU/RAW export to the log."""
+        out_dir = res.get("out_dir")
+        if out_dir:
+            self.log_message(f"All output written to: {out_dir}")
+        for w in res.get("warnings", []):
+            self.log_message(f"  WARNING: {w}")
+
+        for r in res.get("results", []):
+            # NEW: handle failed channel pairs (csv_path is None, "error" present)
+            if r.get("csv_path") is None:
+                self.log_message(
+                    f"  [{r.get('label', '?')}]  FAILED — see traceback below:"
+                )
+                err = r.get("error")
+                if err:
+                    self.log_message(err)
+                else:
+                    self.log_message("  (no error traceback captured)")
+                continue
+
+            self.log_message(
+                f"  [{r['label']}]  "
+                f"ACR={r['acr1_Hz']:.0f} Hz  "
+                f"FLCS={r['flcs_used']}  "
+                f"AP={r['ap_used']}  "
+                f"→ {os.path.basename(r['csv_path'])}"
+            )
+
+        fret = res.get("fret")
+        if fret is not None:
+            self.log_message(
+                f"  FRET: E={fret.get('FRET_efficiency', float('nan')):.3f}  "
+                f"S={fret.get('stoichiometry', float('nan')):.3f}  "
+                f"PR={fret.get('proximity_ratio', float('nan')):.3f}"
+            )
+            self.log_message(
+                f"  Photon counts:  "
+                f"F_DD={fret.get('F_DD', 0):.0f}  "
+                f"F_DA={fret.get('F_DA', 0):.0f}  "
+                f"F_AA={fret.get('F_AA', 0):.0f}"
+            )
+        burst_info = res.get("burst_removal_info", {})
+        for name, info in burst_info.items():
+            if info.get("threshold_counts") is None:
+                continue
+            n_burst = info.get("n_burst_bins", 0)
+            n_total = info.get("n_total_bins", 0)
+            pct = 100.0 * n_burst / max(1, n_total)
+            self.log_message(
+                f"  Burst removal [{name}]: threshold={info['threshold_counts']} counts/bin, "
+                f"{n_burst}/{n_total} bins flagged ({pct:.1f}%)"
+            )
+
+
+# ── display ───────────────────────────────────────────────────────────────────
+
+    def _update_ptu_fcs_display(self, res: dict):
+        """
+        Draw a unified 2x2 overview:
+          top-left     : all G(tau) curves overlaid
+          top-right    : intensity traces of all involved channels overlaid
+          bottom-left  : FCS_Fixer-style 2-row FLCS diagnostic
+                         (top sub-panel: normalized patterns, log scale;
+                          bottom sub-panel: filter functions, linear scale)
+          bottom-right : FRET metrics summary (PIE mode) or placeholder
+        """
+        results          = res.get("results", [])
+        fret             = res.get("fret", None)
+        intensity_traces = res.get("intensity_traces", {})
+
+        if not results:
+            return
+
+        self.ptu_fcs_fig.clear()
+        outer_gs = gridspec.GridSpec(
+            2, 2, figure=self.ptu_fcs_fig, hspace=0.5, wspace=0.32
+        )
+        ax_corr  = self.ptu_fcs_fig.add_subplot(outer_gs[0, 0])
+        ax_trace = self.ptu_fcs_fig.add_subplot(outer_gs[0, 1])
+        ax_fret  = self.ptu_fcs_fig.add_subplot(outer_gs[1, 1])
+
+        corr_color_map = {
+            "donor_ACF":    "steelblue",
+            "acceptor_ACF": "tomato",
+            "PIE_CCF":      "seagreen",
+            "ACF":          "steelblue",
+            "CCF":          "mediumpurple",
+            "DD_ACF":       "steelblue",   # NEW
+            "AA_ACF":       "tomato",      # NEW
+            "DA_CCF":       "seagreen",    # NEW
+        }
+        trace_color_map = {"donor": "steelblue", "acceptor": "tomato"}
+        trace_corrected_color_map = {   # NEW: distinct color for the
+                                         # bleach-corrected curve, kept
+                                         # in the same hue family as the
+                                         # raw trace for the same channel
+            "donor":    "navy",
+            "acceptor": "darkred",
+        }
+        from itertools import cycle as _cycle
+        fallback_colors = _cycle(
+            ["steelblue", "tomato", "seagreen", "mediumpurple", "goldenrod", "slategray"]
+        )
+
+        # ── Panel 1 (top-left): all G(tau) curves overlaid ─────────────────
+        any_corr_plotted = False   # NEW
+        for r in results:
+            if r.get("csv_path") is None:   # NEW: skip failed pairs entirely
+                continue
+            lbl   = r["label"]
+            color = corr_color_map.get(lbl, next(fallback_colors))
+            lag_s = np.asarray(r["lag_s"], dtype=float)
+            G     = np.asarray(r["G"],     dtype=float)
+            sg    = np.asarray(r["sigma_G"], dtype=float)
+            if len(lag_s) == 0:
+                continue
+            ax_corr.semilogx(lag_s, G, "-", color=color, linewidth=2, label=lbl)
+            ax_corr.fill_between(lag_s, G - sg, G + sg, alpha=0.15, color=color)
+            any_corr_plotted = True   # NEW
+
+        ax_corr.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        ax_corr.set_xlabel("τ (s)")
+        ax_corr.set_ylabel("G(τ)")
+        corr_flags = []
+        if any(r.get("ap_used")   for r in results if r.get("csv_path")): corr_flags.append("AP corr.")   # NEW guard
+        if any(r.get("flcs_used") for r in results if r.get("csv_path")): corr_flags.append("FLCS")        # NEW guard
+        title = "Correlation curves"
+        if corr_flags:
+            title += "  (" + ", ".join(corr_flags) + ")"
+        ax_corr.set_title(title, fontsize=10)
+        if any_corr_plotted:                     # CHANGED: only call legend if something was plotted
+            ax_corr.legend(fontsize=8)
+        else:
+            ax_corr.text(
+                0.5, 0.5, "All correlations failed\n(see Results & Logs tab)",
+                transform=ax_corr.transAxes, ha="center", va="center",
+                fontsize=10, color="red",
+            )
+        ax_corr.grid(True, alpha=0.3)
+        ax_corr.spines[["top", "right"]].set_visible(False)
+
+        # ── Panel 2 (top-right): intensity traces overlaid ─────────────────
+        any_bleach_corrected = False    #tracks whether to add to the title
+        any_bursts_shaded = False
+        for name, tr in intensity_traces.items():
+            t_s = np.asarray(tr.get("t_s", []), dtype=float)
+            cps = np.asarray(tr.get("cps", []), dtype=float)
+            if len(t_s) == 0:
+                continue
+            color = trace_color_map.get(name, next(fallback_colors))
+            ch    = tr.get("channel", "?")
+            ax_trace.plot(t_s, cps / 1000.0, "-", color=color, linewidth=1.1,
+                          alpha=0.6, label=f"{name} (ch{ch})")
+
+            # NEW: overlay the bleach-corrected trace, if present, in a
+            # distinct (but related) color
+            cps_corr = tr.get("cps_corrected")
+            if cps_corr is not None:
+                t_s_corr = np.asarray(tr.get("t_s_corrected", []), dtype=float)
+                cps_corr = np.asarray(cps_corr, dtype=float)
+                if len(t_s_corr) > 0:
+                    corr_color = trace_corrected_color_map.get(
+                        name, next(fallback_colors)
+                    )
+                    ax_trace.plot(
+                        t_s_corr, cps_corr / 1000.0, "-",
+                        color=corr_color, linewidth=1.4, alpha=0.9,
+                        label=f"{name} (ch{ch}) — bleach corr."
+                    )
+                    any_bleach_corrected = True
+            burst_intervals = tr.get("burst_intervals_s", [])
+            for i_b, (b_start, b_stop) in enumerate(burst_intervals):
+                ax_trace.axvspan(
+                    b_start, b_stop,
+                    color="red", alpha=0.18, linewidth=0,
+                    label=(f"{name} burst removed" if i_b == 0 and not any_bursts_shaded else None),
+                )
+                any_bursts_shaded = True
+
+        ax_trace.set_xlabel("Time (s)")
+        ax_trace.set_ylabel("Count rate (kHz)")
+        title = "Intensity traces"
+        if any_bleach_corrected:
+            title += "  (raw + bleach-corrected)"
+        if any_bursts_shaded:
+            title += "  [red = burst removed]"
+        ax_trace.set_title(title, fontsize=10)
+        ax_trace.legend(fontsize=7)
+        ax_trace.grid(True, alpha=0.3)
+        ax_trace.spines[["top", "right"]].set_visible(False)
+        
+
+        # ── Panel 3 (bottom-left): FCS_Fixer-style 2-row FLCS diagnostic ────
+        # Nested gridspec: top = normalized patterns (log), bottom = filter
+        # functions (linear). NO twin axis -> avoids the tight_layout warning.
+        inner_gs = gridspec.GridSpecFromSubplotSpec(
+            2, 1, subplot_spec=outer_gs[1, 0], height_ratios=[1, 1], hspace=0.12
+        )
+        ax_pat  = self.ptu_fcs_fig.add_subplot(inner_gs[0])
+        ax_filt = self.ptu_fcs_fig.add_subplot(inner_gs[1], sharex=ax_pat)
+
+        tcspc_color_map = {
+            "donor_ACF":    "steelblue",
+            "acceptor_ACF": "tomato",
+            "PIE_CCF":      "seagreen",
+            "ACF":          "steelblue",
+            "CCF":          "mediumpurple",
+            "DD_ACF":       "steelblue",   # NEW
+            "AA_ACF":       "tomato",      # NEW
+            "DA_CCF":       "seagreen",    # NEW
+        }
+        any_tcspc = False
+
+        for r in results:
+            if r.get("csv_path") is None:   # NEW: skip failed pairs
+                continue
+            for key, suffix, alpha_mul in [("tcspc_csv", "", 1.0), ("tcspc_csv_cs2", " (cs2)", 0.6)]:
+                path = r.get(key)
+                if not path or not os.path.isfile(path):
+                    continue
+                if "pattern_signal" not in pd.read_csv(path, nrows=0).columns:
+                    continue  # older CSV without the new columns -- skip gracefully
+
+                any_tcspc = True
+                df    = pd.read_csv(path)
+                color = tcspc_color_map.get(r["label"], next(fallback_colors))
+                lbl   = f"{r['label']}{suffix}"
+
+                # top: normalized patterns (log scale, scatter)
+                sig_mask = df["pattern_signal"] > 0
+                bg_mask  = df["pattern_background"] > 0
+                ax_pat.semilogy(
+                    df["time_ns"][sig_mask], df["pattern_signal"][sig_mask],
+                    "o", color=color, markersize=2.5, alpha=0.9 * alpha_mul,
+                    label=f"{lbl} signal"
+                )
+                ax_pat.semilogy(
+                    df["time_ns"][bg_mask], df["pattern_background"][bg_mask],
+                    "o", color="gray", markersize=2.5, alpha=0.6 * alpha_mul,
+                    label=f"{lbl} bg" if suffix == "" else None
+                )
+
+                # bottom: filter functions (linear, line)
+                ax_filt.plot(
+                    df["time_ns"], df["filter_signal"],
+                    "-", color=color, linewidth=1.1, alpha=0.9 * alpha_mul
+                )
+                ax_filt.plot(
+                    df["time_ns"], df["filter_background"],
+                    "--", color="gray", linewidth=0.9, alpha=0.6 * alpha_mul
+                )
+
+        ax_pat.set_title(
+            "FLCS filter functions" if any_tcspc else "TCSPC (FLCS not used)",
+            fontsize=10
+        )
+        ax_pat.tick_params(axis="x", labelbottom=False)
+        if any_tcspc:
+            ax_pat.legend(fontsize=6, loc="upper right", ncol=1)
+        ax_pat.grid(True, alpha=0.3)
+
+        ax_filt.axhline(0, color="lightgray", linewidth=0.6, zorder=0)
+        # ax_filt.set_title("FLCS filter functions", fontsize=10)
+        ax_filt.set_xlabel("Time (ns)")
+        ax_filt.set_ylabel("Filter weight")
+        ax_filt.grid(True, alpha=0.3)
+
+        # ── Panel 4 (bottom-right): FRET metrics or placeholder ────────────
+        ax_fret.axis("off")
+        if fret is not None:
+            lines = [
+                "PIE-FRET summary",
+                "─" * 26,
+                f"E (FRET eff.)     = {fret.get('FRET_efficiency', float('nan')):.3f}",
+                f"S (stoichiometry) = {fret.get('stoichiometry', float('nan')):.3f}",
+                f"PR (proximity)    = {fret.get('proximity_ratio', float('nan')):.3f}",
+                "",
+                f"F_DD = {fret.get('F_DD', 0):.0f} photons",
+                f"F_DA = {fret.get('F_DA', 0):.0f} photons",
+                f"F_AA = {fret.get('F_AA', 0):.0f} photons",
+                f"F_DA_corr = {fret.get('F_DA_corrected', 0):.0f}",
+                "",
+                f"Donor ACR    = {fret.get('donor_acr_Hz', 0):.0f} Hz",
+                f"Acceptor ACR = {fret.get('acceptor_acr_Hz', 0):.0f} Hz",
+            ]
+            ax_fret.text(
+                0.05, 0.95, "\n".join(lines),
+                transform=ax_fret.transAxes, va="top", ha="left",
+                fontsize=9, fontfamily="monospace",
+                bbox=dict(boxstyle="round,pad=0.4", fc="lightyellow", ec="goldenrod", alpha=0.9),
+            )
+            ax_fret.set_title("FRET metrics", fontsize=10)
+        else:
+            ax_fret.text(
+                0.5, 0.5, "No PIE / FRET data\n(enable PIE mode to compute)",
+                transform=ax_fret.transAxes, ha="center", va="center",
+                fontsize=10, color="gray",
+            )
+            ax_fret.set_title("FRET metrics", fontsize=10)
+
+        # CHANGED: replaced tight_layout() with explicit subplots_adjust().
+        # tight_layout() previously triggered a UserWarning because of the
+        # twinx() axis that used to live in the TCSPC panel. That axis has
+        # been removed entirely (replaced by the 2-row nested gridspec
+        # above), so the warning's root cause is gone -- but subplots_adjust
+        # is kept anyway as a robust, warning-free alternative that also
+        # gives predictable spacing for the nested gridspec.
+        self.ptu_fcs_fig.subplots_adjust(
+            left=0.08, right=0.96, top=0.93, bottom=0.08,
+            hspace=0.5, wspace=0.32
+        )
+        self.ptu_fcs_canvas.draw()
+
+        # ── save overview SVG next to first output CSV ──────────────────────
+        valid_results = [r for r in results if r.get("csv_path")]   # NEW
+        if valid_results:                                            # CHANGED
+            first_csv = valid_results[0]["csv_path"]
+            out_dir  = os.path.dirname(first_csv)
+            svg_path = os.path.join(out_dir, "overview.svg")
+            self.ptu_fcs_fig.savefig(
+                svg_path, dpi=300, bbox_inches="tight", facecolor="white"
+            )
+            self.log_message(f"Output folder: {out_dir}")
+            self.log_message(f"Saved overview SVG: {svg_path}")
+        else:
+            self.log_message("No successful correlations to save an overview for.")
+
+
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------FCS Fitting GUI-------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
@@ -2241,13 +3771,13 @@ class ModularRICSGUI:
         self.log_message("─" * 60)
     def run_fcsfit(self):
         if self._is_worker_running("fcsfit_proc"):
-            messagebox.showwarning("Warning", "FCS fitting is already running.")
+            self._showwarning("Warning", "FCS fitting is already running.")
             return
         csv_path = self.fcsfit_csv.get().strip()
         folder = self.fcsfit_folder.get().strip()
 
         if not csv_path and not folder:
-            messagebox.showwarning("Warning", "Select a single CSV or a batch folder.")
+            self._showwarning("Warning", "Select a single CSV or a batch folder.")
             return
 
         mode = "single" if csv_path else "batch"
@@ -2320,7 +3850,7 @@ class ModularRICSGUI:
             params["pattern"] = self.fcsfit_pattern.get().strip()
 
         self.fcsfit_proc = multiprocessing.Process(
-            target=fcsfit_process_main,
+            target=self._fcsfit_process_main,
             args=(params, self.fcsfit_queue, self.fcsfit_cancel_event),
             daemon=False
         )
@@ -2445,8 +3975,8 @@ class ModularRICSGUI:
                 N      = res.get("N")
                 offset = res.get("offset", 0.0)
                 if aR is not None and N is not None:
-                    from theatrics.fcsfit import calculations as calculate
-                    reIMSD = calculate.iMSD_calc(
+                    
+                    reIMSD = self._calculate.iMSD_calc(
                         tau, float(aR), float(N), pred, float(offset)
                     )
                     ax10.loglog(tau, reIMSD)
@@ -2549,8 +4079,8 @@ class ModularRICSGUI:
             if (fitting_model not in ["siFCS", "siFCSTwoComponents"]
                     and aR is not None and N is not None):
                 try:
-                    from theatrics.fcsfit import calculations as calculate
-                    reIMSD_local = calculate.iMSD_calc(
+                    
+                    reIMSD_local = self._calculate.iMSD_calc(
                         tau, float(aR), float(N), pred, float(offset)
                     )
                 except Exception:
@@ -2643,7 +4173,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.progress_bar.grid_remove()
                     self.log_message(payload)
-                    messagebox.showerror("FCS Fit Error", "FCS fitting failed. See log.")
+                    self._showerror("FCS Fit Error", "FCS fitting failed. See log.")
                     return
 
         except queue.Empty:
@@ -2666,13 +4196,13 @@ class ModularRICSGUI:
 
     def run_frap(self):
         if self._is_worker_running("frap_proc"):
-            messagebox.showwarning("Warning", "FRAP analysis is already running.")
+            self._showwarning("Warning", "FRAP analysis is already running.")
             return
         czi_path = self.frap_czi.get().strip()
         folder = self.frap_folder.get().strip()
 
         if not czi_path and not folder:
-            messagebox.showwarning("Warning", "Select a single CZI or a batch folder.")
+            self._showwarning("Warning", "Select a single CZI or a batch folder.")
             return
 
         mode = "single" if czi_path else "batch"
@@ -2724,7 +4254,7 @@ class ModularRICSGUI:
             params["pattern"] = self.frap_pattern.get()
 
         self.frap_proc = multiprocessing.Process(
-            target=frap_process_main,
+            target=self._frap_process_main,
             args=(params, self.frap_queue, self.frap_cancel_event),
             daemon=False
         )
@@ -2807,7 +4337,7 @@ class ModularRICSGUI:
                 continue
             popt = fit_results[k][0]
             axB.plot(t_all, norm_traces[fi], 'o', color=colors[k], ms=2.5, alpha=0.35)
-            axB.plot(ts, frap_analysis.evaluate_model(xs, popt, imaging_bleach), '-',
+            axB.plot(ts, self._frap_analysis.evaluate_model(xs, popt, imaging_bleach), '-',
                      color=colors[k], lw=2.2,
                      label=(f'ROI {fi+1}: Mobile fraction={popt[4]:.2f}, '
                             f't½={fit_results[k][2]:.2f} s'))
@@ -2839,7 +4369,7 @@ class ModularRICSGUI:
 
             axC.plot(t_post, np.clip(corr, -0.3, f_mob_f * 1.4),
                      'o', color=colors[k], ms=2.5, alpha=0.4)
-            S_fit = frap_analysis._soumpasis(x_abs, x_0f, R_f, D_f)
+            S_fit = self._frap_analysis._soumpasis(x_abs, x_0f, R_f, D_f)
             axC.plot(t_rel, f_mob_f * S_fit, '-', color=colors[k], lw=2.2,
                      label=(f'ROI {fi+1}: Mobile fraction={f_mob_f:.2f}, '
                             f'f_bl={f_bl_f:.2f}, t½={fit_results[k][2]:.2f} s'))
@@ -2865,7 +4395,7 @@ class ModularRICSGUI:
             t_post = (post_i - bleach_frame) * dt
             pre_mu = float(np.nanmean(norm_traces[fi][:bleach_frame])) + 1e-9
             resid = (norm_traces[fi][bleach_frame:].astype(float)
-                     - frap_analysis.evaluate_model(post_i, popt, imaging_bleach)) / pre_mu
+                     - self._frap_analysis.evaluate_model(post_i, popt, imaging_bleach)) / pre_mu
             all_r.extend(resid.tolist())
             win = max(3, len(resid) // 15)
             if len(resid) > win * 2:
@@ -2931,7 +4461,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.progress_bar.grid_remove()
                     self.log_message(payload)
-                    messagebox.showerror("FRAP Error", "FRAP analysis failed. See log.")
+                    self._showerror("FRAP Error", "FRAP analysis failed. See log.")
                     return
 
         except queue.Empty:
@@ -2952,10 +4482,10 @@ class ModularRICSGUI:
     
     def run_diffusion_map(self):
         if self._is_worker_running("diffmap_proc"):
-            messagebox.showwarning("Warning", "Diffusion map is already running.")
+            self._showwarning("Warning", "Diffusion map is already running.")
             return
         if not self.input_file_diff_map.get():
-            messagebox.showwarning("Warning", "Please select an input file first")
+            self._showwarning("Warning", "Please select an input file first")
             return
 
         self.log_message("Starting Diffusion Map (worker)...")
@@ -2980,7 +4510,7 @@ class ModularRICSGUI:
         self.diffmap_cancel_event = multiprocessing.Event()
 
         self.diffmap_proc = multiprocessing.Process(
-            target=diffusion_map_process_main,
+            target=self._diffusion_map_process_main,
             args=(params, self.diffmap_queue, self.diffmap_cancel_event),
             daemon=False
         )
@@ -3030,7 +4560,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.progress_bar.grid_remove()
                     self.set_ui_busy(False)
-                    messagebox.showerror("Diffusion Map Error", "Diffusion map failed. See log.")
+                    self._showerror("Diffusion Map Error", "Diffusion map failed. See log.")
                     return
 
         except queue.Empty:
@@ -3048,6 +4578,8 @@ class ModularRICSGUI:
 # -------------------------------------------------ICS GUI-------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------- 
     def create_ics_tab(self):
+        from theatrics.workers.ics_worker import ics_process_main
+        self._ics_process_main = ics_process_main
         ics_frame = ttk.Frame(self.notebook)
         self.notebook.add(ics_frame, text="ICS")
 
@@ -3056,7 +4588,8 @@ class ModularRICSGUI:
 
         row = 0
         #  single file 
-        ttk.Label(params_frame, text="Single TIFF:").grid(row=row, column=0, sticky="w")
+        ttk.Label(params_frame, text="Single TIFF / PTU:").grid(
+            row=row, column=0, sticky="w")
         self.ics_tiff = tk.StringVar()
         e1 = ttk.Entry(params_frame, textvariable=self.ics_tiff, width=28)
         e1.grid(row=row, column=1, sticky="ew")
@@ -3068,7 +4601,8 @@ class ModularRICSGUI:
 
         row += 1
         #  batch folder 
-        ttk.Label(params_frame, text="Batch folder:").grid(row=row, column=0, sticky="w")
+        ttk.Label(params_frame, text="Batch folder (TIFF or PTU):").grid(
+            row=row, column=0, sticky="w")
         self.ics_folder = tk.StringVar()
         e2 = ttk.Entry(params_frame, textvariable=self.ics_folder, width=28)
         e2.grid(row=row, column=1, sticky="ew")
@@ -3081,9 +4615,20 @@ class ModularRICSGUI:
         row += 1
         ttk.Label(params_frame, text="File pattern:").grid(row=row, column=0, sticky="w")
         self.ics_pattern = tk.StringVar(value="*.tiff")
-        ttk.Entry(params_frame, textvariable=self.ics_pattern,
-                  width=18).grid(row=row, column=1, sticky="w")
-
+        pattern_combo = ttk.Combobox(
+            params_frame,
+            textvariable=self.ics_pattern,
+            values=["*.tiff", "*.tif", "*.ptu"],
+            width=18,
+        )
+        pattern_combo.grid(row=row, column=1, sticky="w")
+        row += 1
+        ttk.Label(params_frame, text="Channel:").grid(
+            row=row, column=0, sticky="w")
+        self.ics_channel = tk.StringVar(value="0")
+        ttk.Combobox(params_frame, textvariable=self.ics_channel,
+                     values=["0", "1", "2", "3", "4"], width=5).grid(
+            row=row, column=1, sticky="w")
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6)
@@ -3149,49 +4694,57 @@ class ModularRICSGUI:
 
     #  browse helpers 
     def _browse_ics_tiff(self):
-        fn = filedialog.askopenfilename(
-            title="Select TIFF file",
-            filetypes=[("TIFF files", "*.tif *.tiff"), ("All files", "*.*")]
+        fn = self._ask_open_filename(
+            title="Select TIFF or PTU file",
+            filetypes=[
+                ("All supported files", "*.tif *.tiff *.ptu"),
+                ("TIFF files",          "*.tif *.tiff"),
+                ("PTU files",           "*.ptu"),
+                ("All files",           "*.*"),
+            ]
         )
         if fn:
             self.ics_tiff.set(fn)
 
     def _browse_ics_folder(self):
-        folder = filedialog.askdirectory(title="Select ICS batch folder")
+        folder = self._ask_directory(title="Select ICS batch folder")
         if folder:
             self.ics_folder.set(folder)
 
     #  run 
     def _run_ics(self):
         if self._is_worker_running("ics_proc"):
-            messagebox.showwarning("Warning", "ICS is already running.")
+            self._showwarning("Warning", "ICS is already running.")
             return
 
         tiff_path = self.ics_tiff.get().strip()
         folder    = self.ics_folder.get().strip()
 
         if not tiff_path and not folder:
-            messagebox.showwarning("Warning",
+            self._showwarning("Warning",
                                    "Select a single TIFF or a batch folder.")
             return
 
         mode = "single" if tiff_path else "batch"
 
         config = {
-            "block_length":            self._safe_int(
-                                           self.ics_block_length,
-                                           "Block length", 10),
-            "frame_skip":              self._safe_int(
-                                           self.ics_frame_skip,
-                                           "Frame skip", 1),
-            "bin_frames":              self._safe_int(
-                                           self.ics_bin_frames,
-                                           "Bin frames", 1),
+            "block_length":             self._safe_int(
+                                            self.ics_block_length,
+                                            "Block length", 10),
+            "frame_skip":               self._safe_int(
+                                            self.ics_frame_skip,
+                                            "Frame skip", 1),
+            "bin_frames":               self._safe_int(
+                                            self.ics_bin_frames,
+                                            "Bin frames", 1),
             "threshold_multiplication": self._safe_float(
-                                           self.ics_threshold_mult,
-                                           "Threshold multiplier", 0.1),
-            "save_block_images":       bool(self.ics_save_block_images.get()),
-            "pattern":                 self.ics_pattern.get().strip(),
+                                            self.ics_threshold_mult,
+                                            "Threshold multiplier", 0.1),
+            "save_block_images":        bool(self.ics_save_block_images.get()),
+            "pattern":                  self.ics_pattern.get().strip(),
+            "channel":                  self._safe_int(
+                                            self.ics_channel,
+                                            "Channel", 0),
         }
 
         self.log_message(f"Starting ICS ({mode})...")
@@ -3209,7 +4762,7 @@ class ModularRICSGUI:
             params["folder"] = folder
 
         self.ics_proc = multiprocessing.Process(
-            target=ics_process_main,
+            target=self._ics_process_main,
             args=(params, self.ics_queue, self.ics_cancel_event),
             daemon=False,
         )
@@ -3359,7 +4912,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.progress_bar.grid_remove()
                     self.set_ui_busy(False)
-                    messagebox.showerror("ICS Error",
+                    self._showerror("ICS Error",
                                          "ICS failed. See log.")
                     return
 
@@ -3379,6 +4932,10 @@ class ModularRICSGUI:
     # -----------------------------------------------------------------------------------------------------------------------------------------------------------
 
     def create_vesicle_tab(self):
+        from theatrics.workers.vesicle_worker import vesicle_process_main
+        self._vesicle_process_main = vesicle_process_main
+        from theatrics.vesicle import detection as vesicle_detection
+        self._vesicle_detection = vesicle_detection
         ves_frame = ttk.Frame(self.notebook)
         self.notebook.add(ves_frame, text="Vesicle Finder")
 
@@ -3399,7 +4956,7 @@ class ModularRICSGUI:
         ttk.Label(params_frame, text="Channel:").grid(row=row, column=0, sticky="w")
         self.vesicle_channel = tk.StringVar(value="0")
         ttk.Combobox(params_frame, textvariable=self.vesicle_channel,
-                     values=["0", "1", "2", "3"], width=5).grid(row=row, column=1, sticky="w")
+                     values=["0", "1", "2", "3", "4"], width=5).grid(row=row, column=1, sticky="w")
         row += 1
         ttk.Label(params_frame, text="Fallback pixel size (µm):").grid(row=row, column=0, sticky="w")
         self.vesicle_fallback_px = tk.StringVar(value="")
@@ -3604,7 +5161,7 @@ class ModularRICSGUI:
         ttk.Label(params_frame, text="Intensity channel:").grid(row=row, column=0, sticky="w")
         self.vesicle_straighten_channel = tk.StringVar(value="0")
         ttk.Combobox(params_frame, textvariable=self.vesicle_straighten_channel,
-                     values=["0", "1", "2", "3"], width=5).grid(row=row, column=1, sticky="w")
+                     values=["0", "1", "2", "3", "4"], width=5).grid(row=row, column=1, sticky="w")
 
         row += 1
         straighten_btn_frame = ttk.Frame(params_frame)
@@ -3650,9 +5207,14 @@ class ModularRICSGUI:
         self._vesicle_selected_labels = set()
 
     def _browse_vesicle_czi(self):
-        fn = filedialog.askopenfilename(
-            title="Select CZI file",
-            filetypes=[("CZI files", "*.czi"), ("All files", "*.*")]
+        fn = self._ask_open_filename(
+            title="Select CZI or PTU file",
+            filetypes=[
+                ("All supported files", "*.czi *.ptu"),
+                ("CZI files",           "*.czi"),
+                ("PTU files",           "*.ptu"),
+                ("All files",           "*.*"),
+            ]
         )
         if fn:
             self.vesicle_czi.set(fn)
@@ -3700,11 +5262,11 @@ class ModularRICSGUI:
     # ---- DETECT ----
     def _run_vesicle_detect(self):
         if self._is_worker_running("vesicle_proc"):
-            messagebox.showwarning("Warning", "Vesicle detection is already running.")
+            self._showwarning("Warning", "Vesicle detection is already running.")
             return
 
         if not self.vesicle_czi.get().strip():
-            messagebox.showwarning("Warning", "Please select a CZI file.")
+            self._showwarning("Warning", "Please select a CZI file.")
             return
 
         self.log_message("Starting vesicle detection...")
@@ -3720,7 +5282,7 @@ class ModularRICSGUI:
         self.vesicle_cancel_event = multiprocessing.Event()
 
         self.vesicle_proc = multiprocessing.Process(
-            target=vesicle_process_main,
+            target=self._vesicle_process_main,
             args=(params, self.vesicle_queue, self.vesicle_cancel_event),
             daemon=False,
         )
@@ -3731,7 +5293,7 @@ class ModularRICSGUI:
     def _run_vesicle_crop(self):
         selected = list(self._vesicle_selected_labels)
         if not selected:
-            messagebox.showwarning("Warning", "No vesicles selected. Click on the image or listbox.")
+            self._showwarning("Warning", "No vesicles selected. Click on the image or listbox.")
             return
         self._start_vesicle_crop(selected)
 
@@ -3741,13 +5303,13 @@ class ModularRICSGUI:
             return
         all_labels = [v["label"] for v in self._vesicle_detect_result["vesicles"]]
         if not all_labels:
-            messagebox.showwarning("Warning", "No vesicles detected.")
+            self._showwarning("Warning", "No vesicles detected.")
             return
         self._start_vesicle_crop(all_labels)
 
     def _start_vesicle_crop(self, labels):
         if self._is_worker_running("vesicle_proc"):
-            messagebox.showwarning("Warning", "Vesicle processing is already running.")
+            self._showwarning("Warning", "Vesicle processing is already running.")
             return
 
         self.log_message(f"Cropping {len(labels)} vesicle(s)...")
@@ -3763,7 +5325,7 @@ class ModularRICSGUI:
         self.vesicle_cancel_event = multiprocessing.Event()
 
         self.vesicle_proc = multiprocessing.Process(
-            target=vesicle_process_main,
+            target=self._vesicle_process_main,
             args=(params, self.vesicle_queue, self.vesicle_cancel_event),
             daemon=False,
         )
@@ -3806,7 +5368,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.progress_bar.grid_remove()
                     self.log_message(payload)
-                    messagebox.showerror("Vesicle Error", "Vesicle detection failed. See log.")
+                    self._showerror("Vesicle Error", "Vesicle detection failed. See log.")
                     return
 
         except queue.Empty:
@@ -3833,7 +5395,7 @@ class ModularRICSGUI:
         if pixel_size_um:
             self.log_message(f"Pixel size: {pixel_size_um:.4f} µm")
 
-        if not vesicle_detection.CELLPOSE_AVAILABLE:
+        if not self._vesicle_detection.CELLPOSE_AVAILABLE:
             self.log_message("NOTE: Cellpose not installed; used Otsu fallback segmentation.")
 
         if self.vesicle_method.get() in ("hough", "hough_transmitted"):
@@ -3979,11 +5541,11 @@ class ModularRICSGUI:
     def _run_vesicle_straighten(self):
         selected = list(self._vesicle_selected_labels)
         if not selected:
-            messagebox.showwarning("Warning", "No vesicles selected.")
+            self._showwarning("Warning", "No vesicles selected.")
             return
         vesicles = [v for v in self._vesicle_detect_result["vesicles"] if v["label"] in selected]
         if not all("radius" in v for v in vesicles):
-            messagebox.showwarning("Warning", "Straightening requires Hough-detected vesicles with known radius.")
+            self._showwarning("Warning", "Straightening requires Hough-detected vesicles with known radius.")
             return
         self._start_vesicle_straighten(vesicles)
 
@@ -3992,13 +5554,13 @@ class ModularRICSGUI:
             return
         vesicles = [v for v in self._vesicle_detect_result["vesicles"] if "radius" in v]
         if not vesicles:
-            messagebox.showwarning("Warning", "No vesicles with known radius. Use Hough detection.")
+            self._showwarning("Warning", "No vesicles with known radius. Use Hough detection.")
             return
         self._start_vesicle_straighten(vesicles)
 
     def _start_vesicle_straighten(self, vesicles):
         if self._is_worker_running("vesicle_proc"):
-            messagebox.showwarning("Warning", "Vesicle processing is already running.")
+            self._showwarning("Warning", "Vesicle processing is already running.")
             return
 
         self.log_message(f"Straightening {len(vesicles)} vesicle(s)...")
@@ -4024,7 +5586,7 @@ class ModularRICSGUI:
         self.vesicle_cancel_event = multiprocessing.Event()
 
         self.vesicle_proc = multiprocessing.Process(
-            target=vesicle_process_main,
+            target=self._vesicle_process_main,
             args=(params, self.vesicle_queue, self.vesicle_cancel_event),
             daemon=False,
         )
@@ -4149,6 +5711,8 @@ class ModularRICSGUI:
     # ------------------------------------------------- Vesicle Finder GUI ------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------------------------------------------------------------
     def create_afm_tab(self):
+        from theatrics.workers.afm_worker import afm_worker_main
+        self._afm_worker_main = afm_worker_main
         afm_frame = ttk.Frame(self.notebook)
         self.notebook.add(afm_frame, text="AFM")
 
@@ -4365,7 +5929,7 @@ class ModularRICSGUI:
     # 
 
     def _browse_afm_file(self):
-        fn = filedialog.askopenfilename(
+        fn = self._ask_open_filename(
             title="Select JPK file",
             filetypes=[
                 ("JPK QI image", "*.jpk-qi-image"),
@@ -4379,11 +5943,11 @@ class ModularRICSGUI:
     def _afm_load_file(self):
         fp = self.afm_filepath.get().strip()
         if not fp:
-            messagebox.showwarning("Warning", "Please select a JPK file.")
+            self._showwarning("Warning", "Please select a JPK file.")
             return
 
         if self._is_worker_running("afm_proc"):
-            messagebox.showwarning("Warning", "AFM worker is already running.")
+            self._showwarning("Warning", "AFM worker is already running.")
             return
 
         self.log_message(f"Loading AFM file: {fp}")
@@ -4395,7 +5959,7 @@ class ModularRICSGUI:
         self.afm_cancel_event = multiprocessing.Event()
 
         self.afm_proc = multiprocessing.Process(
-            target=afm_worker_main,
+            target=self._afm_worker_main,
             args=(
                 {"task": "load",
                  "filepath": fp,
@@ -4464,7 +6028,7 @@ class ModularRICSGUI:
         (x0, y0, h0), (x1, y1, h1) = self._afm_click_points
 
         if self._is_worker_running("afm_proc"):
-            messagebox.showwarning("Warning", "AFM worker is busy.")
+            self._showwarning("Warning", "AFM worker is busy.")
             return
 
         params = {
@@ -4495,7 +6059,7 @@ class ModularRICSGUI:
         self.afm_cancel_event = multiprocessing.Event()
 
         self.afm_proc = multiprocessing.Process(
-            target=afm_worker_main,
+            target=self._afm_worker_main,
             args=(params, self.afm_queue, self.afm_cancel_event),
             daemon=False,
         )
@@ -4538,7 +6102,7 @@ class ModularRICSGUI:
         self.afm_cancel_event = multiprocessing.Event()
 
         self.afm_proc = multiprocessing.Process(
-            target=afm_worker_main,
+            target=self._afm_worker_main,
             args=(params, self.afm_queue, self.afm_cancel_event),
             daemon=False,
         )
@@ -4792,14 +6356,14 @@ class ModularRICSGUI:
 
     def _afm_save_results(self):
         if not self._afm_profiles:
-            messagebox.showwarning("Warning", "No profiles to save.")
+            self._showwarning("Warning", "No profiles to save.")
             return
 
         fp = self.afm_filepath.get().strip()
         default_dir  = str(Path(fp).parent) if fp else "."
         default_stem = Path(fp).stem        if fp else "afm"
 
-        save_dir = filedialog.askdirectory(
+        save_dir = self._ask_directory(
             title="Select folder to save AFM results",
             initialdir=default_dir,
         )
@@ -4955,7 +6519,7 @@ class ModularRICSGUI:
                     self.status_var.set("Error")
                     self.progress_bar.grid_remove()
                     self.set_ui_busy(False)
-                    messagebox.showerror(
+                    self._showerror(
                         "AFM Error", "AFM processing failed. See log."
                     )
                     return
@@ -4980,7 +6544,7 @@ class ModularRICSGUI:
 
     def save_results(self):
         """Save analysis results"""
-        filename = filedialog.asksaveasfilename(
+        filename = self._ask_saveas_filename(
             title="Save results",
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
@@ -4991,16 +6555,19 @@ class ModularRICSGUI:
             self.log_message(f"Results saved to {filename}")
 
     def save_session(self):
-        """Save current session parameters"""
-        filename = filedialog.asksaveasfilename(
+        """Save current session parameters (only for tabs currently enabled
+        in this window -- see ModularRICSGUI.enabled_tabs)."""
+        filename = self._ask_saveas_filename(
             title="Save session",
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
         )
         if filename:
             try:
-                session_data = {
-                    'simulation_params': {
+                session_data = {}
+
+                if hasattr(self, "img_width"):
+                    session_data['simulation_params'] = {
                         'img_width': self.img_width.get(),
                         'img_height': self.img_height.get(),
                         'n_frames': self.n_frames.get(),
@@ -5015,15 +6582,19 @@ class ModularRICSGUI:
                         'psf_sigma': self.psf_sigma.get(),
                         'sim_type': self.sim_type.get(),
                         'output_path': self.output_path.get()
-                    },
-                    'export_params': {
+                    }
+
+                if hasattr(self, "input_file"):
+                    session_data['export_params'] = {
                         'input_file': self.input_file.get(),
                         'channel': self.channel.get(),
                         'crop_factor': self.crop_factor.get(),
                         'window_size': self.window_size.get(),
                         'correct_drift': self.correct_drift.get()
-                    },
-                    'fitting_params': {
+                    }
+
+                if hasattr(self, "rics_file"):
+                    session_data['fitting_params'] = {
                         'rics_file': self.rics_file.get(),
                         'fit_pixel_size': self.fit_pixel_size.get(),
                         'fit_pixel_dwell': self.fit_pixel_dwell.get(),
@@ -5034,7 +6605,6 @@ class ModularRICSGUI:
                         'fit_crop_slow': self.fit_crop_slow.get(),
                         'diffusion_model': self.diffusion_model.get()
                     }
-                }
 
                 with open(filename, 'w') as f:
                     json.dump(session_data, f, indent=2)
@@ -5042,11 +6612,11 @@ class ModularRICSGUI:
                 self.log_message(f"Session saved to {filename}")
 
             except Exception as e:
-                messagebox.showerror("Error", f"Could not save session: {str(e)}")
+                self._showerror("Error", f"Could not save session: {str(e)}")
 
     def load_session(self):
         """Load session parameters"""
-        filename = filedialog.askopenfilename(
+        filename = self._ask_open_filename(
             title="Load session",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
         )
@@ -5056,7 +6626,7 @@ class ModularRICSGUI:
                     session_data = json.load(f)
 
                 # Load simulation parameters
-                if 'simulation_params' in session_data:
+                if 'simulation_params' in session_data and hasattr(self, "img_width"):
                     sim_params = session_data['simulation_params']
                     self.img_width.set(sim_params.get('img_width', '256'))
                     self.img_height.set(sim_params.get('img_height', '256'))
@@ -5074,7 +6644,7 @@ class ModularRICSGUI:
                     self.output_path.set(sim_params.get('output_path', './simulation_output.tif'))
 
                 # Load export parameters
-                if 'export_params' in session_data:
+                if 'export_params' in session_data and hasattr(self, "input_file"):
                     export_params = session_data['export_params']
                     self.input_file.set(export_params.get('input_file', ''))
                     self.channel.set(export_params.get('channel', '0'))
@@ -5083,7 +6653,7 @@ class ModularRICSGUI:
                     self.correct_drift.set(export_params.get('correct_drift', False))
 
                 # Load fitting parameters
-                if 'fitting_params' in session_data:
+                if 'fitting_params' in session_data and hasattr(self, "rics_file"):
                     fit_params = session_data['fitting_params']
                     self.rics_file.set(fit_params.get('rics_file', ''))
                     self.fit_pixel_size.set(fit_params.get('fit_pixel_size', '20'))
@@ -5098,11 +6668,11 @@ class ModularRICSGUI:
                 self.log_message(f"Session loaded from {filename}")
 
             except Exception as e:
-                messagebox.showerror("Error", f"Could not load session: {str(e)}")
+                self._showerror("Error", f"Could not load session: {str(e)}")
 
     def export_plots(self):
         """Export all plots"""
-        directory = filedialog.askdirectory(title="Select directory for plot export")
+        directory = self._ask_directory(title="Select directory for plot export")
         if directory:
             try:
                 plots_saved = 0
@@ -5124,7 +6694,7 @@ class ModularRICSGUI:
                 self.log_message(f"Exported {plots_saved} plots to {directory}")
 
             except Exception as e:
-                messagebox.showerror("Error", f"Could not export plots: {str(e)}")
+                self._showerror("Error", f"Could not export plots: {str(e)}")
 
     def _safe_float(self, var, name, fallback=0.0):
         """Safely parse a tk.StringVar as float; log and return fallback on failure."""
@@ -5168,6 +6738,7 @@ class ModularRICSGUI:
             "vesicle_cancel_event",
             "ics_cancel_event",
             "afm_cancel_event",
+            "ptu_fcs_cancel_event",
 
         ):
             ev = getattr(self, ev_attr, None)
@@ -5199,11 +6770,11 @@ class ModularRICSGUI:
                 setattr(self, proc_attr, None)
 
         # 2–3) Stop any known worker processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc",):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc","ptu_fcs_proc",):
             _stop_proc(proc_attr)
 
         # 4) Close queues properly (prevents resource_tracker semaphore warnings)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue","afm_queue",):
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue","afm_queue","ptu_fcs_queue",):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
@@ -5225,6 +6796,7 @@ class ModularRICSGUI:
             "frap_cancel_event",
             "vesicle_cancel_event",
             "afm_cancel_event",
+            "ptu_fcs_cancel_event",
         ):
             setattr(self, ev_attr, None)
 
@@ -5273,7 +6845,7 @@ class ModularRICSGUI:
     
     def _cleanup_mp(self):
         # terminate running processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc",):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc","ptu_fcs_proc",):
             p = getattr(self, proc_attr, None)
             try:
                 if p is not None and p.is_alive():
@@ -5284,7 +6856,7 @@ class ModularRICSGUI:
             setattr(self, proc_attr, None)
 
         # close queues properly
-        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue", "afm_queue",):
+        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue", "afm_queue","ptu_fcs_queue",):
             q = getattr(self, q_attr, None)
             try:
                 if q is not None:
@@ -5314,7 +6886,7 @@ class ModularRICSGUI:
         return p is not None and p.is_alive()
 
     def restart_application(self):
-        if not messagebox.askyesno(
+        if not self._askyesno(
             "Restart Application",
             "This will restart the software and clear all data.\n\nContinue?"
         ):

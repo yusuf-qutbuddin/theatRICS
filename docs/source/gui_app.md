@@ -185,6 +185,44 @@ Use this tab when analyzing perpendicular scanning FCS line scans rather than im
 
 ---
 
+## FCS Export
+
+See [Workflow: FCS Export](workflow/fcs_export.md).
+
+The **FCS Export** tab supports:
+
+- PicoQuant PTU files (via `tttrlib`) in standard single-channel mode,
+  PIE mode, or plain two-channel cross-correlation mode
+- Zeiss ConfoCor3 / LSM980 `.raw` files (custom binary format)
+
+### Correlation pair selection (DD / AA / DA)
+
+For two-channel measurements the user can independently enable or disable:
+
+- **DD** — channel 1 / donor autocorrelation
+- **AA** — channel 2 / acceptor autocorrelation
+- **DA** — channel 1 × channel 2 cross-correlation
+
+Single-channel files always compute their own autocorrelation regardless
+of these checkboxes.
+
+### Corrections available per file type
+
+| Correction | PTU | Zeiss .raw |
+|------------|-----|------------|
+| Wohland SD uncertainty | ✓ | ✓ |
+| Afterpulsing subtraction | ✓ | ✓ |
+| Bleach/drift correction | ✓ | ✓ |
+| Burst removal | ✓ | ✗ |
+| FLCS background correction | ✓ | ✗ |
+| PIE mode | ✓ | ✗ |
+
+PIE mode, FLCS background correction, and burst removal are automatically
+disabled in the GUI when a `.raw` file is selected, since these require
+TCSPC micro-time information not present in Zeiss `.raw` files.
+
+---
+
 ## FCS Fitting
 
 The **FCS Fitting** tab fits correlation curves exported as CSV files using a selection of FCS diffusion and blinking models.

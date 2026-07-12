@@ -27,7 +27,81 @@ try:
 except ImportError:
     cv2 = None
     OPENCV_AVAILABLE = False
+# ── at the top of detection.py, after existing imports ───────────
 
+try:
+    import tttrlib
+    TTTRLIB_AVAILABLE = True
+except ImportError:
+    TTTRLIB_AVAILABLE = False
+
+
+def read_ptu_frames(
+    ptu_path: str,
+    channel: int = 0,
+    frame_start: int = 0,
+    frame_end: Optional[int] = None,
+    frame_step: int = 1,
+) -> Tuple[np.ndarray, int]:
+    """
+    Read selected frames from a PicoQuant Luminosa raster PTU file.
+
+    Uses read_ptu_stack() from export_rics which calls CLSMImage
+    with fill=True. Equivalent interface to read_czi_frames().
+
+    Parameters
+    ----------
+    ptu_path    : str  — path to .ptu file
+    channel     : int  — routing channel (0-based)
+    frame_start : int  — first frame index to include
+    frame_end   : int or None — last frame (exclusive); None = all
+    frame_step  : int  — step between frames
+
+    Returns
+    -------
+    stack         : np.ndarray (T_selected, H, W)
+    n_total_frames: int
+    """
+    if not TTTRLIB_AVAILABLE:
+        raise ImportError(
+            "tttrlib is not installed. "
+            "Install it with:  pip install tttrlib"
+        )
+
+    from theatrics.modules.export_rics import (
+        read_ptu_stack,
+        read_ptu_metadata,
+    )
+
+    # read full stack — shape (n_frames, n_lines, n_pixels)
+    full_stack = read_ptu_stack(ptu_path, channel=channel)
+    n_total    = full_stack.shape[0]
+
+    if frame_end is None or frame_end > n_total:
+        frame_end = n_total
+
+    frame_indices = list(range(frame_start, frame_end, max(1, frame_step)))
+    stack = full_stack[frame_indices]
+
+    return stack, n_total
+
+
+def read_pixel_size_from_ptu(ptu_path: str) -> Optional[float]:
+    """
+    Read pixel size in µm from a PicoQuant Luminosa PTU file header.
+    Returns None if not available.
+    """
+    if not TTTRLIB_AVAILABLE:
+        return None
+    try:
+        from theatrics.modules.export_rics import read_ptu_metadata
+        meta = read_ptu_metadata(ptu_path)
+        px_nm = meta.get("pixel_size_nm", None)
+        if px_nm is not None:
+            return float(px_nm) / 1000.0   # nm → µm
+        return None
+    except Exception:
+        return None
 # ---------------------------------------------------------------------------
 # Debug utilities
 # ---------------------------------------------------------------------------
@@ -178,9 +252,16 @@ def threshold_huang(image: np.ndarray) -> float:
     return float(bin_centers[best_t])
 def read_pixel_size_from_czi(czi_path: str) -> Optional[float]:
     """
-    Read pixel size in µm from CZI metadata.
+    Read pixel size in µm from a CZI or PTU file.
+    Dispatches on file extension.
     Returns None if not found.
     """
+    ext = os.path.splitext(str(czi_path))[1].lower()
+
+    if ext == ".ptu":
+        return read_pixel_size_from_ptu(czi_path)
+
+    # ── original CZI path ────────────────────────────────────────
     try:
         with pyczi.open_czi(str(czi_path)) as czidoc:
             root = ET.fromstring(czidoc.raw_metadata)
@@ -192,7 +273,7 @@ def read_pixel_size_from_czi(czi_path: str) -> Optional[float]:
                                 try:
                                     val_m = float(child.text.strip())
                                     if val_m > 0:
-                                        return val_m * 1e6  # metres → µm
+                                        return val_m * 1e6
                                 except ValueError:
                                     pass
     except Exception:
@@ -1401,16 +1482,28 @@ def read_czi_frames(
     frame_step: int = 1,
 ) -> Tuple[np.ndarray, int]:
     """
-    Read selected frames from a CZI file.
+    Read selected frames from a CZI or PTU file.
+    Dispatches on file extension.
 
     Returns
     -------
-    stack : 3D array (T_selected, Y, X)
+    stack          : 3D array (T_selected, Y, X)
     n_total_frames : total number of frames in the file
     """
+    ext = os.path.splitext(str(czi_path))[1].lower()
+
+    if ext == ".ptu":
+        return read_ptu_frames(
+            czi_path, channel=channel,
+            frame_start=frame_start,
+            frame_end=frame_end,
+            frame_step=frame_step,
+        )
+
+    # ── original CZI path ────────────────────────────────────────
     czi_path = str(czi_path)
     with pyczi.open_czi(czi_path) as czidoc:
-        bbox = czidoc.total_bounding_box
+        bbox    = czidoc.total_bounding_box
         n_total = bbox.get('T', (0, 1))[1]
 
         if frame_end is None or frame_end > n_total:
@@ -1425,7 +1518,6 @@ def read_czi_frames(
 
     stack = np.stack(frames, axis=0)
     return stack, n_total
-
 
 # ---------------------------------------------------------------------------
 # Full pipeline: one file

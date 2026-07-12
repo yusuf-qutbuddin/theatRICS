@@ -44,13 +44,35 @@ DEFAULT_ICS_CONFIG = {
 
 def _load_movie(path: str) -> np.ndarray:
     """
-    Load a TIFF movie to a float64 ndarray of shape (T, H, W).
-    Tries picasso first (handles TiffMultiMap), falls back to tifffile.
+    Load a TIFF or PTU movie to a float64 ndarray of shape (T, H, W).
+
+    For TIFF: tries picasso first, falls back to tifffile.
+    For PTU:  uses tttrlib via read_ptu_stack() from export_rics.
     """
+    ext = os.path.splitext(path)[1].lower()
+
+    # ── PTU (PicoQuant Luminosa raster image) ────────────────────
+    if ext == ".ptu":
+        from theatrics.modules.export_rics import (
+            read_ptu_stack,
+            TTTRLIB_AVAILABLE,
+        )
+        if not TTTRLIB_AVAILABLE:
+            raise ImportError(
+                "tttrlib is not installed. "
+                "Install it with:  pip install tttrlib"
+            )
+        # read_ptu_stack returns (n_frames, n_lines, n_pixels) float32
+        # channel=0 is the default; ICS worker passes channel via config
+        channel = 0   # overridden below if passed in config
+        arr = read_ptu_stack(path, channel=channel).astype(np.float64)
+        return arr
+
+    # ── TIFF ─────────────────────────────────────────────────────
     if PICASSO_AVAILABLE:
         file, _ = p_io.load_movie(path)
         if isinstance(file, p_io.TiffMultiMap):
-            n_frames = len(file)
+            n_frames       = len(file)
             shape_y, shape_x = file[0].shape
             arr = np.zeros((n_frames, shape_y, shape_x), dtype=np.float64)
             for i, frame in enumerate(file):
@@ -66,7 +88,6 @@ def _load_movie(path: str) -> np.ndarray:
             "Install one with:  pip install picasso  or  pip install tifffile"
         )
 
-    # ensure 3D
     if arr.ndim == 2:
         arr = arr[np.newaxis, :, :]
     elif arr.ndim == 1:
@@ -228,31 +249,43 @@ def analyse_tiff(path: str,
                  progress_queue=None,
                  cancel_event=None) -> dict:
     """
-    Full ICS pipeline for a single TIFF file.
-
-    Returns a result dict consumed by the worker and GUI.
+    Full ICS pipeline for a single TIFF or PTU file.
     """
     path = str(path)
     base, _ = os.path.splitext(path)
     stem = os.path.basename(base)
+    ext  = os.path.splitext(path)[1].lower()
 
     block_length           = config.get("block_length", 10)
     threshold_mult         = config.get("threshold_multiplication", 0.1)
     frame_skip             = config.get("frame_skip", 1)
     bin_frames             = config.get("bin_frames", 1)
     save_block_images_flag = config.get("save_block_images", True)
+    channel                = config.get("channel", 0)
 
-    # ── load ──
-    arr = _load_movie(path)
+    # ── load ──────────────────────────────────────────────────────
+    if ext == ".ptu":
+        from theatrics.modules.export_rics import (
+            read_ptu_stack,
+            TTTRLIB_AVAILABLE,
+        )
+        if not TTTRLIB_AVAILABLE:
+            raise ImportError(
+                "tttrlib is not installed. "
+                "Install it with:  pip install tttrlib"
+            )
+        arr = read_ptu_stack(path, channel=channel).astype(np.float64)
+    else:
+        arr = _load_movie(path)
 
     if arr.ndim == 2:
         arr = arr[np.newaxis]
 
-    # ── prepare ──
-    arr = _prepare_frames(arr, block_length, bin_frames)
+    # ── prepare ───────────────────────────────────────────────────
+    arr      = _prepare_frames(arr, block_length, bin_frames)
     n_blocks = arr.shape[0] // block_length
 
-    rows = []
+    rows       = []
     mean_stack = []
     G_stack    = []
 
@@ -280,7 +313,7 @@ def analyse_tiff(path: str,
                  "stats": stats, "stem": stem}
             ))
 
-    # ── build per-file DataFrame ──
+    # ── build per-file DataFrame ───────────────────────────────────
     df = pd.DataFrame(rows).set_index("block")
     first_valid = df["mean_G"].dropna()
     if len(first_valid) > 0:
@@ -288,11 +321,11 @@ def analyse_tiff(path: str,
     else:
         df["Normalized"] = float("nan")
 
-    # ── save CSV ──
+    # ── save CSV ───────────────────────────────────────────────────
     csv_path = base + f"_threshold{threshold_mult}_corr.csv"
     df.to_csv(csv_path, index=True)
 
-    # ── build and save overview figure ──
+    # ── build and save overview figure ────────────────────────────
     mean_stack_arr = np.stack(mean_stack) if mean_stack else None
     G_stack_arr    = np.stack(G_stack)    if G_stack    else None
 
@@ -358,28 +391,35 @@ def run_ics_batch(parent_dir: str,
                   progress_queue=None,
                   cancel_event=None) -> dict:
     """
-    Iterate over sample subfolders, process all TIFFs, aggregate per sample,
-    and write a global combined CSV + plot.
+    Iterate over sample subfolders, process all TIFF and PTU files,
+    aggregate per sample, and write a global combined CSV and plot.
     """
     parent_dir = str(parent_dir)
     pattern    = config.get("pattern", "*.tiff")
     ext        = os.path.splitext(pattern)[-1].lower()
 
-    glob_results  = {}
-    failed        = []
+    # support PTU pattern directly
+    is_ptu = ext == ".ptu"
+
+    glob_results = {}
+    failed       = []
 
     subdirs = sorted(
         d for d in os.listdir(parent_dir)
         if os.path.isdir(os.path.join(parent_dir, d))
     )
 
-    # count total TIFFs for progress reporting
-    total_tiffs = sum(
-        len([f for f in os.listdir(os.path.join(parent_dir, s))
-             if f.lower().endswith(ext)])
+    def _matching_files(folder):
+        return [
+            f for f in os.listdir(folder)
+            if f.lower().endswith(ext)
+        ]
+
+    total_files = sum(
+        len(_matching_files(os.path.join(parent_dir, s)))
         for s in subdirs
     )
-    done_tiffs = 0
+    done_files = 0
 
     if progress_queue is not None:
         progress_queue.put(("progress", 0.0))
@@ -389,8 +429,7 @@ def run_ics_batch(parent_dir: str,
             break
 
         sample_path = os.path.join(parent_dir, sample)
-        file_names  = [f for f in os.listdir(sample_path)
-                       if f.lower().endswith(ext)]
+        file_names  = _matching_files(sample_path)
         if not file_names:
             continue
 
@@ -411,24 +450,24 @@ def run_ics_batch(parent_dir: str,
                 if progress_queue is not None:
                     progress_queue.put(("error_file", fpath))
 
-            done_tiffs += 1
+            done_files += 1
             if progress_queue is not None:
                 progress_queue.put((
                     "progress",
-                    100.0 * done_tiffs / max(1, total_tiffs)
+                    100.0 * done_files / max(1, total_files)
                 ))
 
         if tiff_results:
             agg = aggregate_sample(tiff_results, sample, sample_path)
             glob_results[sample] = agg
 
-    # ── global CSV ──
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    # ── global CSV and plot ───────────────────────────────────────
+    timestamp     = datetime.now().strftime("%Y-%m-%d_%H-%M")
     combined_path = None
     combined_fig_path = None
 
     if glob_results:
-        frames = [v["agg_df"] for v in glob_results.values()]
+        frames   = [v["agg_df"] for v in glob_results.values()]
         combined = pd.concat(frames, axis=1)
         combined.dropna(how="all", inplace=True)
 
@@ -438,10 +477,9 @@ def run_ics_batch(parent_dir: str,
         )
         combined.to_csv(combined_path)
 
-        # ── global plot ──
         fig, ax = plt.subplots(figsize=(8, 5))
         for sample, v in glob_results.items():
-            df = v["agg_df"]
+            df       = v["agg_df"]
             mean_col = f"{sample}_mean"
             std_col  = f"{sample}_std"
             if mean_col in df.columns:
@@ -466,11 +504,11 @@ def run_ics_batch(parent_dir: str,
         plt.close(fig)
 
     return {
-        "glob_results":      glob_results,
-        "failed":            failed,
-        "combined_csv":      combined_path,
-        "combined_fig":      combined_fig_path,
-        "n_total":           total_tiffs,
-        "n_ok":              total_tiffs - len(failed),
-        "n_failed":          len(failed),
+        "glob_results":  glob_results,
+        "failed":        failed,
+        "combined_csv":  combined_path,
+        "combined_fig":  combined_fig_path,
+        "n_total":       total_files,
+        "n_ok":          total_files - len(failed),
+        "n_failed":      len(failed),
     }

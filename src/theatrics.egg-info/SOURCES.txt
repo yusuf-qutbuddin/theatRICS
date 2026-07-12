@@ -3,6 +3,7 @@ README.md
 pyproject.toml
 src/theatrics/__init__.py
 src/theatrics/gui_app.py
+src/theatrics/launcher.py
 src/theatrics/main.py
 src/theatrics.egg-info/PKG-INFO
 src/theatrics.egg-info/SOURCES.txt
@@ -18,13 +19,18 @@ src/theatrics/afm/range.py
 src/theatrics/fcsfit/__init__.py
 src/theatrics/fcsfit/batch.py
 src/theatrics/fcsfit/calculations.py
+src/theatrics/fcsfit/fcs_fixer_core.py
 src/theatrics/fcsfit/memfcs.py
 src/theatrics/fcsfit/models_and_fit.py
+src/theatrics/fcsfit/ptu_correlate.py
+src/theatrics/fcsfit/zeiss_raw_correlate.py
 src/theatrics/frap/__init__.py
 src/theatrics/frap/analysis.py
+src/theatrics/ics/__init__.py
 src/theatrics/ics/analysis.py
 src/theatrics/modules/SFCS_module.py
 src/theatrics/modules/export_rics.py
+src/theatrics/modules/import_ptu.py
 src/theatrics/modules/inspect_metadata.py
 src/theatrics/modules/rics_fit.py
 src/theatrics/modules/simRICS.py
@@ -42,6 +48,7 @@ src/theatrics/workers/fcsfit_worker.py
 src/theatrics/workers/fit_worker.py
 src/theatrics/workers/frap_worker.py
 src/theatrics/workers/ics_worker.py
+src/theatrics/workers/ptu_correlate_worker.py
 src/theatrics/workers/sfcs_worker.py
 src/theatrics/workers/sim_worker.py
 src/theatrics/workers/vesicle_worker.py

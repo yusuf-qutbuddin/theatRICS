@@ -87,7 +87,7 @@ These are needed across the different workflows:
 | `cellpose` | Vesicle Finder | Deep learning segmentation |
 | `picasso` | ICS | Large multi-file TIFF stack loading |
 | `AFMReader` | AFM | Loading JPK QI image files |
-
+| `tttrlib` | RICS, Diffusion Map | Loading PicoQuant PTU CLSM image files |
 ---
 
 ## Example dependency installation
@@ -212,7 +212,20 @@ pip install AFMReader
 Without AFMReader, JPK files cannot be loaded and the AFM tab will
 raise an error on file load.
 
-Install optional vesicle dependencies:
+### PTU files (PicoQuant Luminosa)
+PTU file support requires:
+- `tttrlib`
+
+Install:
+
+```bash
+pip install tttrlib
+```
+
+Without tttrlib, PTU files cannot be loaded. CZI and TIFF workflows
+are unaffected.
+
+### Install optional vesicle dependencies:
 
 ```bash
 pip install opencv-python cellpose 

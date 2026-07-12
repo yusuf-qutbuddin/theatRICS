@@ -1,7 +1,7 @@
 # theatRICS
 
-theatRICS is a GUI application for quantitative fluorescence microscopy analysis,
-integrating multiple workflows into a single interface.
+theatRICS is a GUI application for quantitative fluorescence microscopy
+analysis, integrating multiple workflows into a single interface.
 
 ```{toctree}
 :maxdepth: 2
@@ -9,10 +9,12 @@ integrating multiple workflows into a single interface.
 
 installation
 quickstart
+launcher
 gui_app
 workflow/rics_export
 workflow/rics_fitting
 workflow/sfcs
+workflow/fcs_export
 workflow/fcs_fitting
 workflow/frap
 workflow/ics

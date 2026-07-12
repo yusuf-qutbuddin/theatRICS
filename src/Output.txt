@@ -1,1 +1,0 @@
-/fs/gpfs41/lv02/fileset02/pool/pool-schwille-user/Qutbuddin_Yusuf/_Protocols/RICS_fit/test_data/FCS/Results/g3diffCal_fit_summary.csv12345678910

@@ -13,6 +13,10 @@ statsmodels
 openpyxl
 path
 AFMReader
+numba
+tttrlib
+pyglet
+platform
 
 [cellpose]
 cellpose

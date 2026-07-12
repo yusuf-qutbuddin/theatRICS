@@ -12,17 +12,29 @@ from pylibCZIrw import czi as pyczi
 
 def _derive_metadata_path(rics_tif_path: str) -> str:
     """
-    Your convention: ..._RICScorr.tif -> corresponding .czi with same prefix before last "_...."
+    Your convention: ..._RICScorr.tif -> corresponding .czi or .ptu
+    with same prefix before last "_...".
     Example:
-      sample_01_RICScorr.tif -> sample_01.czi
+      sample_01_RICScorr.tif -> sample_01.czi  (tried first)
+                              -> sample_01.ptu  (tried if .czi missing)
     """
     root, _ = os.path.splitext(rics_tif_path)
     parts = os.path.basename(root).split("_")
     if len(parts) >= 2:
-        base = "_".join(parts[:-1]) + ".czi"
+        base_stem = "_".join(parts[:-1])
     else:
-        base = os.path.basename(root) + ".czi"
-    return os.path.join(os.path.dirname(root), base)
+        base_stem = os.path.basename(root)
+
+    folder = os.path.dirname(root)
+
+    # try CZI first, then PTU
+    for ext in (".czi", ".ptu"):
+        candidate = os.path.join(folder, base_stem + ext)
+        if os.path.isfile(candidate):
+            return candidate
+
+    # fallback: return CZI path even if missing (original behaviour)
+    return os.path.join(folder, base_stem + ".czi")
 
 
 def _crop_center_map(R, crop_fast, crop_slow):
@@ -63,9 +75,34 @@ def fit_rics_one_file(params, out_q=None):
     # ---- metadata (optional) ----
     metadata_path = _derive_metadata_path(rics_file)
     if os.path.isfile(metadata_path):
+        ext_meta = os.path.splitext(metadata_path)[1].lower()
         channel_to_use = int(params.get("channel_to_use", 0))
-        with pyczi.open_czi(metadata_path) as czidoc:
-            Pixel_size_nm, Pixel_dwell_time_us, line_time_ms = im.get_metadata(czidoc, channel_to_use)
+
+        if ext_meta == ".czi":
+            with pyczi.open_czi(metadata_path) as czidoc:
+                Pixel_size_nm, Pixel_dwell_time_us, line_time_ms = (
+                    im.get_metadata(czidoc, channel_to_use)
+                )
+        elif ext_meta == ".ptu":
+            from theatrics.modules.export_rics import (
+                read_ptu_metadata,
+                TTTRLIB_AVAILABLE,
+            )
+            if not TTTRLIB_AVAILABLE:
+                raise ImportError(
+                    "tttrlib is not installed — "
+                    "cannot read PTU metadata for fitting. "
+                    "Install with:  pip install tttrlib"
+                )
+            meta = read_ptu_metadata(metadata_path)
+            Pixel_size_nm       = meta["pixel_size_nm"]
+            Pixel_dwell_time_us = meta["pixel_dwell_time_us"]
+            line_time_ms        = meta["line_time_ms"]
+        else:
+            raise ValueError(
+                f"Unsupported metadata file format: {ext_meta}"
+            )
+
         pixel_size_um = float(Pixel_size_nm) * 1e-3
         pixel_time_s  = float(Pixel_dwell_time_us) * 1e-6
         line_time_s   = float(line_time_ms) * 1e-3

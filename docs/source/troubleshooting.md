@@ -80,6 +80,20 @@ Possible reasons:
 - worker process crash
 - too many files for available memory
 
+### PTU file will not load
+- install tttrlib: `pip install tttrlib`
+- verify the file is a valid PicoQuant PTU CLSM image
+- check that the requested channel index exists in the file;
+  available channels are logged automatically when a PTU file is
+  selected in the GUI
+
+### PTU metadata not found
+Some PTU files may not store pixel size or dwell time in the standard
+header tags. If metadata cannot be read:
+- the pixel size, dwell time, and line time fields in the Fitting tab
+  will not be auto-populated
+- enter the values manually in the RICS Fitting parameter fields
+
 Check the **Results & Logs** tab for the traceback.
 
 ---

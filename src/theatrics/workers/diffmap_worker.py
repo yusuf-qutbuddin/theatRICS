@@ -90,9 +90,39 @@ def diffusion_map_process_main(params, out_q, cancel_event=None):
         cpu_n = max(1, min(cpu_n, mp.cpu_count()))
 
         # ---- metadata ----
-        with pyczi.open_czi(input_file) as czidoc:
-            Pixel_size_nm, Pixel_dwell_time_us, line_time_ms = im.get_metadata(czidoc, channel)
-            n_frames = czidoc.total_bounding_box["T"][1]
+        ext = os.path.splitext(input_file)[1].lower()
+
+        if ext == ".czi":
+            with pyczi.open_czi(input_file) as czidoc:
+                Pixel_size_nm, Pixel_dwell_time_us, line_time_ms = (
+                    im.get_metadata(czidoc, channel)
+                )
+                n_frames = czidoc.total_bounding_box["T"][1]
+
+        elif ext == ".ptu":
+            from theatrics.modules.export_rics import (
+                read_ptu_metadata,
+                read_ptu_stack,
+                TTTRLIB_AVAILABLE,
+            )
+            if not TTTRLIB_AVAILABLE:
+                raise ImportError(
+                    "tttrlib is not installed. "
+                    "Install it with:  pip install tttrlib"
+                )
+            meta = read_ptu_metadata(input_file)
+            Pixel_size_nm       = meta["pixel_size_nm"]
+            Pixel_dwell_time_us = meta["pixel_dwell_time_us"]
+            line_time_ms        = meta["line_time_ms"]
+            n_frames            = meta["n_frames"]
+
+            if Pixel_size_nm is None or Pixel_dwell_time_us is None:
+                raise ValueError(
+                    "Could not read pixel size or dwell time from PTU metadata. "
+                    "Check the file header."
+                )
+        else:
+            raise ValueError(f"Unsupported file format for diffusion map: {ext}")
 
         pixelsize_um = float(Pixel_size_nm) * 1e-3
         pixeltime_s = float(Pixel_dwell_time_us) * 1e-6
@@ -103,16 +133,21 @@ def diffusion_map_process_main(params, out_q, cancel_event=None):
                     return
         out_q.put(("progress", 5.0))
 
-        # ---- read frames to stack ----
-        all_frames = []
-        for i_frame in range(n_frames):
-            if cancel_event.is_set():
-                out_q.put(("cancelled", None))
-                return
-            frame = export_rics.read_frame(input_file, i_frame, channel)
-            all_frames.append(frame)
-
-        stack = np.stack(all_frames, axis=0)  # (T, Y, X)
+         # ---- read frames to stack ----
+        if ext == ".ptu":
+            from theatrics.modules.export_rics import read_ptu_stack
+            stack = read_ptu_stack(input_file, channel=channel)
+            # stack shape: (n_frames, n_lines, n_pixels)
+        else:
+            # CZI path (original)
+            all_frames = []
+            for i_frame in range(n_frames):
+                if cancel_event.is_set():
+                    out_q.put(("cancelled", None))
+                    return
+                frame = export_rics.read_frame(input_file, i_frame, channel)
+                all_frames.append(frame)
+            stack = np.stack(all_frames, axis=0)
         h, w = stack.shape[-2], stack.shape[-1]
 
         out_q.put(("progress", 15.0))
