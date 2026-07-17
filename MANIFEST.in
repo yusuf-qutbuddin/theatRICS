@@ -1,0 +1,2 @@
+recursive-include theatrics/icons *.png
+recursive-include theatrics/fonts *.ttf *.otf *.TTF *.OTF

@@ -491,7 +491,7 @@ When reporting issues, please include:
 
 ## Contributors
 
-The majority of the code and functionality is developed by Yusuf Qutbuddin (yusufqq@biochem.mpg.de) and the code and the method is inspired and follows similar algorithms as the [PAM](https://gitlab.com/PAM-PIE/PAM.git) software. Some functionalities have been derived from an earlier script by Jan-Hagen Krohn and the FRAP analysis has been contributed by Marco Halbeisen. Perplexity.ai and ChatGPT 5.2 has been used for debugging, annotation and file parsing algorithms and for searching and implementing tkinter.
+The majority of the code and functionality is developed by Yusuf Qutbuddin (yusufqq@biochem.mpg.de) and the code and the method is inspired and follows similar algorithms as the [PAM](https://gitlab.com/PAM-PIE/PAM.git) software. Some functionalities have been derived from an earlier script by Jan-Hagen Krohn and the FRAP analysis has been contributed by Marco Halbeisen. The export of point FCS curves uses [tttrlib](https://github.com/Fluorescence-Tools/tttrlib) and uses some algorithms from [FCSFixer](https://github.com/Janhagenkrohn/FCS_Fixer). Perplexity.ai, ChatGPT 5.2, and Claude Sonnet 4.6 have been used for debugging, annotation and file parsing algorithms and for searching and implementing tkinter, and for writing documentation and comments in the scripts.
 
 
 ---

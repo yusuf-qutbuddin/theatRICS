@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: theatrics
-Version: 1.10.4
+Version: 1.10.11
 Summary: GUI for RICS, SFCS, FCS, ICS, FRAP, AFM and vesicle analysis
 Author-email: Yusuf Qutbuddin <yusuf.qutbuddin@gmail.com>
 License: BSD 3-Clause License
@@ -53,7 +53,6 @@ Requires-Dist: AFMReader
 Requires-Dist: numba
 Requires-Dist: tttrlib
 Requires-Dist: pyglet
-Requires-Dist: platform
 Provides-Extra: opencv
 Requires-Dist: opencv-python; extra == "opencv"
 Provides-Extra: cellpose

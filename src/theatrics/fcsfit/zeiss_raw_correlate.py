@@ -33,6 +33,7 @@ import struct
 import numpy as np
 import pandas as pd
 from scipy import stats as _stats
+from pathlib import Path
 
 # ── optional numba acceleration for the photon-counting inner loop ─────────
 try:
@@ -843,7 +844,7 @@ def _load_channel_data(base_readname: str, channel_index: int) -> dict:
             f"Undefined channel index {channel_index}. "
             f"Allowed: 1->ChS1, 2->ChS2, 3->Ch2, 4->GaAsP1"
         )
-    return read_confocor3_raw(base_readname + suffix + ".raw")
+    return read_confocor3_raw(Path(base_readname + suffix + ".raw"))
 
 
 def run_fcs_export_raw(
@@ -1073,13 +1074,14 @@ def run_fcs_export_raw(
             # ── export CSV (MATLAB layout: skip first lag point [1:end]) ───
             label = f"ch{ch1_idx}ch{ch2_idx}"
             tags = ""
+
             if correct_bleaching:
                 tags += "_bl"
             if ap_used:
                 tags += "_ap"
             tags += "_corr"
 
-            csv_path = os.path.join(out_base, f"{label}{tags}.csv")
+            csv_path = os.path.join(out_base, f"{base_readname}_{label}{tags}.csv")
 
             acr_col = np.zeros(len(lags_s) - 1)
             acr_col[0] = cntrate1

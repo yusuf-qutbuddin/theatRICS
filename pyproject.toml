@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "theatrics"
-version = "1.10.4"
+version = "1.11.11"
 description = "GUI for RICS, SFCS, FCS, ICS, FRAP, AFM and vesicle analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,7 +30,7 @@ dependencies = [
   "numba",
   "tttrlib",
   "pyglet",
-  "platform",
+  
 ]
 
 [project.optional-dependencies]
@@ -48,6 +48,16 @@ theatrics = "theatrics.main:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.package-data]
+theatrics = [
+  "icons/*.png",
+  "fonts/*.ttf",
+  "fonts/*.otf",
+  "fonts/**/*.ttf",
+  "fonts/**/*.otf",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

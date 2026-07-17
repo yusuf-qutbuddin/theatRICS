@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-import glob
+# import glob
+from pathlib import Path
 import traceback
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
@@ -67,11 +68,11 @@ def run_single_csv(
     )
     corrected_D = D_val * ((experiment_T + 273.15) / (D_temp + 273.15)) * viscosity_term
 
-    # Save path: next to file in Results/
+    # Save path: next to file 
     base = _strip_csv(csv_path)
     folder = os.path.dirname(base)
-    results_dir = os.path.join(folder, "Results")
-    os.makedirs(results_dir, exist_ok=True)
+    results_dir = folder
+    # os.makedirs(results_dir, exist_ok=True)
     save_path = os.path.join(results_dir, f"{fitting_model}_fit_summary.csv")
 
     # The legacy function expects `path` WITHOUT ".csv" and does `path + ".csv"`
@@ -112,11 +113,10 @@ def run_batch_folder(
     Per-file outputs are still handled locally by the GUI display/export
     if desired, while the batch summary is written once here.
     """
+    target_folder = Path(folder).resolve()
     csvs = sorted(
-    p for p in glob.glob(
-        os.path.join(folder, "**", pattern), recursive=True
-    )
-    if "Results" not in p.split(os.sep)
+    str(p) for p in target_folder.rglob(pattern)
+    if "Results" not in p.parts
     )
 
     n_total = len(csvs)
@@ -126,7 +126,7 @@ def run_batch_folder(
     summary_rows = []
 
     # one global summary in the outer folder
-    outer_results_dir = os.path.join(folder, "Results")
+    outer_results_dir = os.path.join(str(target_folder), "Results")
     os.makedirs(outer_results_dir, exist_ok=True)
 
     fitting_model = kwargs["fitting_model"]
@@ -171,9 +171,9 @@ def run_batch_folder(
             ax.semilogx(tau, G, "r", label="G observed")
             ax.semilogx(tau, pred, "g", label="G fit")
             ax.fill_between(tau, G - sigma, G + sigma,
-                            color="b", alpha=0.2, label="±σ")
-            ax.set_xlabel("τ (s)")
-            ax.set_ylabel("G(τ)")
+                            color="b", alpha=0.2, label=r"±$\sigma$")
+            ax.set_xlabel(r"$\tau$ (s)")
+            ax.set_ylabel(r"G($\tau$)")
             ax.set_title(os.path.basename(csv_path))
             ax.legend(fontsize=8)
             ax.grid(True, alpha=0.3)

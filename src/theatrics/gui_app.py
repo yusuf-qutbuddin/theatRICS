@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import sv_ttk
 import numpy as np
-from path import Path
+from pathlib import Path
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
@@ -34,7 +34,7 @@ import platform
 
 
 
-# ── Heavy / workflow-specific imports are intentionally NOT done here. ──────
+#  Heavy / workflow-specific imports are intentionally NOT done here. 
 #
 # This module is imported by theatrics.launcher at application startup,
 # BEFORE the user has chosen which category (Correlation Methods / AFM /
@@ -57,7 +57,7 @@ import platform
 from theatrics.utils.file_utils import get_files_from_folder
 from theatrics.utils.mp_utils import clamp_workers
 
-# ── Tab registry for modular startup ────────────────────────────────────────
+#  Tab registry for modular startup 
 # Maps a short tab key to the name of the ModularRICSGUI method that
 # creates that tab. Used both by the full/legacy application (which
 # creates all tabs) and by theatrics.launcher.TheatricsLauncher, which
@@ -73,6 +73,7 @@ TAB_CREATORS = {
     "ics":          "create_ics_tab",
     "afm":          "create_afm_tab",
     "vesicle":      "create_vesicle_tab",
+    "ptu_image":    "create_ptu_image_tab",
     "results":      "create_results_tab",
 }
 
@@ -93,7 +94,7 @@ CATEGORY_TABS = {
         "afm", "results",
     ],
     "Imaging Methods": [
-        "ics", "vesicle", "frap", "results",
+        "ics", "vesicle", "frap","ptu_image", "results",
     ],
 }
 
@@ -104,7 +105,7 @@ class ModularRICSGUI:
 
         self.root.geometry("1400x900")
         self._dialog_parent = root
-        # ── modular startup ──────────────────────────────────────────────────
+        #  modular startup 
         # `tabs` is an optional list of keys from the module-level
         # TAB_CREATORS registry, specifying which tabs to build. If None
         # (the default), ALL tabs are created -- this preserves the
@@ -180,6 +181,9 @@ class ModularRICSGUI:
                                foreground='red',
                                justify='center')
         error_label.pack(expand=True)
+    def toggle_theme(self):
+        sv_ttk.toggle_theme()
+
 
     def setup_gui(self):
         """Setup the main GUI interface"""
@@ -192,22 +196,21 @@ class ModularRICSGUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.grid(row=0, column=0, sticky='nsew')
 
-        # ── modular tab creation ─────────────────────────────────────────────
+        #  modular tab creation 
         # Only build the tabs requested via self.enabled_tabs. Tabs are
         # created in this fixed, sensible order regardless of the order
         # they happen to appear in self.enabled_tabs.
         _tab_order = [
             "simulation", "rics_export", "rics_fitting", "sfcs",
             "fcs_export", "fcs_fitting", "frap", "ics", "afm",
-            "vesicle", "results",
+            "vesicle","ptu_image", "results",
         ]
-        from theatrics.splash import SplashScreen
-        splash = SplashScreen(self.root)
+        
         for tab_key in _tab_order:
             if tab_key in self.enabled_tabs:
                 creator_name = TAB_CREATORS[tab_key]
                 getattr(self, creator_name)()
-        self.root.after(2000, splash.dismiss)
+        
         
         self.status_var = tk.StringVar()
         self.status_var.set("Ready - All modules loaded successfully")
@@ -215,7 +218,7 @@ class ModularRICSGUI:
         self.status_bar.grid(row=1, column=0, sticky='w')
         button_frame = ttk.Frame(self.root)
         button_frame.grid(row=1, column=0, sticky="e", padx=10)
-        self.button = ttk.Button(button_frame, text="Toggle Dark Mode", command=sv_ttk.toggle_theme)
+        self.button = ttk.Button(button_frame, text="Toggle Dark Mode", command=self.toggle_theme)
         self.button.pack(side=tk.LEFT, padx=5)
 
         self.cancel_button = ttk.Button(button_frame, text="Cancel Running Task", command=self.cancel_current_task)
@@ -526,12 +529,12 @@ class ModularRICSGUI:
         ptu_frame = ttk.Frame(self.notebook)
         self.notebook.add(ptu_frame, text="FCS Export")
 
-        # ── scrollable left panel ────────────────────────────────────────────
+        #  scrollable left panel 
         # We wrap in a Canvas so the long parameter list can be scrolled
         left_outer = ttk.Frame(ptu_frame)
         left_outer.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
 
-        canvas_scroll = tk.Canvas(left_outer, width=460, highlightthickness=0)
+        canvas_scroll = tk.Canvas(left_outer, highlightthickness=0)
         scrollbar     = ttk.Scrollbar(
             left_outer, orient="vertical", command=canvas_scroll.yview
         )
@@ -540,15 +543,29 @@ class ModularRICSGUI:
         canvas_scroll.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         params_frame = ttk.Frame(canvas_scroll)
-        canvas_scroll.create_window((0, 0), window=params_frame, anchor="nw")
+        _canvas_window = canvas_scroll.create_window(
+            (0, 0), window=params_frame, anchor="nw"
+        )
 
         def _on_frame_configure(event):
+            # update the scroll region whenever the content changes size
             canvas_scroll.configure(
                 scrollregion=canvas_scroll.bbox("all")
             )
-        params_frame.bind("<Configure>", _on_frame_configure)
+            # ALSO resize the canvas width to match the content width
+            # so nothing gets clipped horizontally
+            canvas_scroll.configure(width=params_frame.winfo_reqwidth())
 
-        # ── file selection ───────────────────────────────────────────────────
+        def _on_canvas_configure(event):
+            # if the canvas is somehow wider than the content (e.g. the
+            # window was resized), expand the inner frame to fill it
+            if event.width > params_frame.winfo_reqwidth():
+                canvas_scroll.itemconfig(_canvas_window, width=event.width)
+
+        params_frame.bind("<Configure>", _on_frame_configure)
+        canvas_scroll.bind("<Configure>", _on_canvas_configure)
+
+        #  file selection 
         row = 0
         ttk.Label(params_frame, text="Single file:").grid(
             row=row, column=0, sticky="w", pady=2
@@ -579,7 +596,7 @@ class ModularRICSGUI:
         self.register_busy_widget(e2)
         self.register_busy_widget(b2)
 
-        # ── mode toggle: standard vs PIE ────────────────────────────────────
+        #  mode toggle: standard vs PIE 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -594,7 +611,7 @@ class ModularRICSGUI:
         )
         self._ptu_pie_checkbox.grid(row=row, column=0, columnspan=3, sticky="w")
 
-        # ── standard mode frame (PTU, no PIE) ────────────────────────────────
+        #  standard mode frame (PTU, no PIE) 
         row += 1
         self._ptu_std_frame = ttk.LabelFrame(
             params_frame, text="Standard mode", padding=6
@@ -633,7 +650,7 @@ class ModularRICSGUI:
             textvariable=self.ptu_fcs_gate_stop, width=8
         ).grid(row=sr, column=1, sticky="w")
 
-        # ── PIE mode frame ───────────────────────────────────────────────────
+        #  PIE mode frame 
         row += 1
         self._ptu_pie_frame = ttk.LabelFrame(
             params_frame, text="PIE mode", padding=6
@@ -727,7 +744,7 @@ class ModularRICSGUI:
                 self._ptu_pie_frame, textvariable=sv, width=8
             ).grid(row=pr, column=1, sticky="w")
 
-        # ── Zeiss .raw mode frame ────────────────────────────────────────────
+        #  Zeiss .raw mode frame 
         row += 1
         self._ptu_raw_frame = ttk.LabelFrame(
             params_frame, text="Zeiss .raw mode", padding=6
@@ -813,7 +830,7 @@ class ModularRICSGUI:
         self._on_ptu_pie_toggle()
         self._ptu_raw_frame.grid_remove()
 
-        # ── correlation settings ─────────────────────────────────────────────
+        #  correlation settings 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -849,7 +866,7 @@ class ModularRICSGUI:
         ttk.Label(
             params_frame, text="(parallel files)", foreground="gray"
         ).grid(row=row, column=2, sticky="w")
-        # ── correlation pair selection (DD / AA / DA) ────────────────────────
+        #  correlation pair selection (DD / AA / DA) 
         row += 1
         self._ptu_ddaada_frame = ttk.LabelFrame(
             params_frame, text="Correlation pairs to compute", padding=6
@@ -889,7 +906,7 @@ class ModularRICSGUI:
             text="DA  (channel 1 × channel 2 cross-correlation)",
             variable=self.ptu_fcs_compute_da,
         ).grid(row=dr, column=0, columnspan=3, sticky="w")
-        # ── Wohland SD settings ──────────────────────────────────────────────
+        #  Wohland SD settings 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -923,7 +940,7 @@ class ModularRICSGUI:
             textvariable=self.ptu_fcs_n_bootstrap, width=6
         ).grid(row=row, column=1, sticky="w")
 
-        # ── afterpulsing (shared between PTU and .raw modes) ────────────────
+        #  afterpulsing (shared between PTU and .raw modes) 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -958,9 +975,9 @@ class ModularRICSGUI:
             command=self._browse_ptu_ap_file, state="disabled"
         )
         self.ptu_fcs_ap_btn.grid(row=row, column=2, padx=3)
-        # ── bleach / drift correction (shared: PTU polynomial undrifting
+        #  bleach / drift correction (shared: PTU polynomial undrifting
         # via FCS_Fixer, .raw polynomial bleach weights via
-        # zeiss_raw_correlate.get_blcorr_weights) ───────────────────────────
+        # zeiss_raw_correlate.get_blcorr_weights) 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -978,7 +995,7 @@ class ModularRICSGUI:
             text="Apply bleach/drift correction (auto polynomial trend)",
             variable=self.ptu_fcs_correct_bleaching,
         ).grid(row=row, column=0, columnspan=2, sticky="w")
-        # ── burst removal ────────────────────────────────────────────────────
+        #  burst removal 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -1009,7 +1026,7 @@ class ModularRICSGUI:
         ttk.Label(
             params_frame, text="(lower = fewer bursts flagged)", foreground="gray"
         ).grid(row=row, column=2, sticky="w")
-        # ── FLCS (PTU only) ──────────────────────────────────────────────────
+        #  FLCS (PTU only) 
         row += 1
         ttk.Separator(params_frame, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
@@ -1040,7 +1057,7 @@ class ModularRICSGUI:
         self.ptu_fcs_run_btn.pack(side=tk.LEFT, padx=5)
         self.register_busy_widget(self.ptu_fcs_run_btn)
 
-        # ── right panel: display ──────────────────────────────────────────────
+        #  right panel: display 
         display_frame = ttk.LabelFrame(
             ptu_frame, text="Correlation Display", padding=10
         )
@@ -1055,7 +1072,7 @@ class ModularRICSGUI:
         toolbar.update()
 
 
-    # ── PIE toggle ────────────────────────────────────────────────────────────────
+    #  PIE toggle 
 
     def _on_ptu_pie_toggle(self):
         """Show/hide the standard vs PIE parameter sections."""
@@ -1067,7 +1084,7 @@ class ModularRICSGUI:
             self._ptu_std_frame.grid()
 
 
-    # ── browse helpers ────────────────────────────────────────────────────────────
+    #  browse helpers 
 
     def _browse_ptu_fcs_file(self):
         fn = self._ask_open_filename(
@@ -1100,9 +1117,12 @@ class ModularRICSGUI:
         -- individual .raw files within a mixed batch will simply fail with
         a clear "not yet implemented" message without affecting .ptu files.
         """
-        import glob
-        ptu_files = glob.glob(os.path.join(folder, "**", "*.ptu"), recursive=True)
-        raw_files = glob.glob(os.path.join(folder, "**", "*.raw"), recursive=True)
+        # 1. Convert to a strict, absolute Path object
+        target_folder = Path(folder).resolve()
+
+        # 2. Use rglob to search recursively only INSIDE target_folder
+        ptu_files = list(target_folder.rglob("*.ptu"))
+        raw_files = list(target_folder.rglob("*.raw"))
 
         if raw_files and not ptu_files:
             self._on_ptu_input_type_detected(is_raw=True)
@@ -1692,7 +1712,7 @@ class ModularRICSGUI:
         results_label_frame = ttk.LabelFrame(results_frame, text="Analysis Results & Logs", padding=10)
         results_label_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        self.results_text = scrolledtext.ScrolledText(results_label_frame, height=25, width=100, font=('Consolas', 10))
+        self.results_text = scrolledtext.ScrolledText(results_label_frame, height=25, width=100, )
         self.results_text.pack(fill=tk.BOTH, expand=True)
 
         # Buttons for results
@@ -2187,21 +2207,21 @@ class ModularRICSGUI:
             if hasattr(self, 'G') and self.G is not None:
                 if hasattr(self, 'G_std') and self.G_std is not None:
                     # Main correlation curve with uncertainty band
-                    ax4.semilogx(self.G[:, 0], self.G[:, 1], 'k-', linewidth=2, label='G(τ)')
+                    ax4.semilogx(self.G[:, 0], self.G[:, 1], 'k-', linewidth=2, label=r'G($\tau$)')
                     ax4.fill_between(self.G[:, 0],
                                      self.G[:, 1] - self.G_std,
                                      self.G[:, 1] + self.G_std,
-                                     alpha=0.3, color='gray', label='±1σ (Wohland)')
+                                     alpha=0.3, color='gray', label=r'±1$\sigma$ (Wohland)')
                     ax4.set_xlabel('Lag time (s)')
-                    ax4.set_ylabel('G(τ)')
+                    ax4.set_ylabel(r'G($\tau$)')
                     ax4.set_title('SFCS Autocorrelation')
                     ax4.grid(True, alpha=0.3)
                     ax4.legend()
                 else:
                     # Just the main curve if no std available
-                    ax4.semilogx(self.G[:, 0], self.G[:, 1], 'k-', linewidth=2, label='G(τ)')
+                    ax4.semilogx(self.G[:, 0], self.G[:, 1], 'k-', linewidth=2, label=r'G($\tau$)')
                     ax4.set_xlabel('Lag time (s)')
-                    ax4.set_ylabel('G(τ)')
+                    ax4.set_ylabel(r'G($\tau$)')
                     ax4.set_title('SFCS Autocorrelation')
                     ax4.grid(True, alpha=0.3)
                     ax4.legend()
@@ -3045,7 +3065,7 @@ class ModularRICSGUI:
                 params["cs1"]     = None
                 params["cs2"]     = None
                 params["channel"] = ch
-        # ── NEW: always build Zeiss .raw-specific params too, regardless of
+        #  NEW: always build Zeiss .raw-specific params too, regardless of
         # whether the current selection is actually a .raw file. These are
         # silently ignored by run_fcs_export() (the PTU pipeline) via its
         # **_ignored_kwargs catch-all, and are the ONLY params actually used
@@ -3066,9 +3086,15 @@ class ModularRICSGUI:
             params["mode"]     = "single"
             params["filepath"] = single
         else:
-            import glob
-            ptu_paths = glob.glob(os.path.join(folder, "**", "*.ptu"), recursive=True)
-            raw_paths = glob.glob(os.path.join(folder, "**", "*.raw"), recursive=True)
+            # 1. Convert to a strict, absolute Path object
+            target_folder = Path(folder).resolve()
+
+            # 2. Use rglob to search recursively only INSIDE target_folder
+            ptu_paths = list(target_folder.rglob("*.ptu"))
+            raw_paths = list(target_folder.rglob("*.raw"))
+            # import glob
+            # ptu_paths = glob.glob(os.path.join(folder, "**", "*.ptu"), recursive=True)
+            # raw_paths = glob.glob(os.path.join(folder, "**", "*.raw"), recursive=True)
             filepaths = sorted(ptu_paths + raw_paths)
 
             if not filepaths:
@@ -3110,7 +3136,7 @@ class ModularRICSGUI:
         self._poll_ptu_fcs_queue()
 
 
-# ── queue polling ─────────────────────────────────────────────────────────────
+#  queue polling 
 
     def _poll_ptu_fcs_queue(self):
         try:
@@ -3240,7 +3266,7 @@ class ModularRICSGUI:
             )
 
 
-# ── display ───────────────────────────────────────────────────────────────────
+#  display 
 
     def _update_ptu_fcs_display(self, res: dict):
         """
@@ -3290,7 +3316,7 @@ class ModularRICSGUI:
             ["steelblue", "tomato", "seagreen", "mediumpurple", "goldenrod", "slategray"]
         )
 
-        # ── Panel 1 (top-left): all G(tau) curves overlaid ─────────────────
+        #  Panel 1 (top-left): all G(tau) curves overlaid 
         any_corr_plotted = False   # NEW
         for r in results:
             if r.get("csv_path") is None:   # NEW: skip failed pairs entirely
@@ -3307,8 +3333,8 @@ class ModularRICSGUI:
             any_corr_plotted = True   # NEW
 
         ax_corr.axhline(0, color="gray", linewidth=0.8, linestyle="--")
-        ax_corr.set_xlabel("τ (s)")
-        ax_corr.set_ylabel("G(τ)")
+        ax_corr.set_xlabel(r"$\tau$ (s)")
+        ax_corr.set_ylabel(r"G($\tau$)")
         corr_flags = []
         if any(r.get("ap_used")   for r in results if r.get("csv_path")): corr_flags.append("AP corr.")   # NEW guard
         if any(r.get("flcs_used") for r in results if r.get("csv_path")): corr_flags.append("FLCS")        # NEW guard
@@ -3327,7 +3353,7 @@ class ModularRICSGUI:
         ax_corr.grid(True, alpha=0.3)
         ax_corr.spines[["top", "right"]].set_visible(False)
 
-        # ── Panel 2 (top-right): intensity traces overlaid ─────────────────
+        #  Panel 2 (top-right): intensity traces overlaid 
         any_bleach_corrected = False    #tracks whether to add to the title
         any_bursts_shaded = False
         for name, tr in intensity_traces.items():
@@ -3378,7 +3404,7 @@ class ModularRICSGUI:
         ax_trace.spines[["top", "right"]].set_visible(False)
         
 
-        # ── Panel 3 (bottom-left): FCS_Fixer-style 2-row FLCS diagnostic ────
+        #  Panel 3 (bottom-left): FCS_Fixer-style 2-row FLCS diagnostic 
         # Nested gridspec: top = normalized patterns (log), bottom = filter
         # functions (linear). NO twin axis -> avoids the tight_layout warning.
         inner_gs = gridspec.GridSpecFromSubplotSpec(
@@ -3453,12 +3479,12 @@ class ModularRICSGUI:
         ax_filt.set_ylabel("Filter weight")
         ax_filt.grid(True, alpha=0.3)
 
-        # ── Panel 4 (bottom-right): FRET metrics or placeholder ────────────
+        #  Panel 4 (bottom-right): FRET metrics or placeholder 
         ax_fret.axis("off")
         if fret is not None:
             lines = [
                 "PIE-FRET summary",
-                "─" * 26,
+                "" * 26,
                 f"E (FRET eff.)     = {fret.get('FRET_efficiency', float('nan')):.3f}",
                 f"S (stoichiometry) = {fret.get('stoichiometry', float('nan')):.3f}",
                 f"PR (proximity)    = {fret.get('proximity_ratio', float('nan')):.3f}",
@@ -3499,7 +3525,7 @@ class ModularRICSGUI:
         )
         self.ptu_fcs_canvas.draw()
 
-        # ── save overview SVG next to first output CSV ──────────────────────
+        #  save overview SVG next to first output CSV 
         valid_results = [r for r in results if r.get("csv_path")]   # NEW
         if valid_results:                                            # CHANGED
             first_csv = valid_results[0]["csv_path"]
@@ -3657,9 +3683,9 @@ class ModularRICSGUI:
         conv_sh  = res.get("return_dict", {}).get("converged",    False)
         conv_jy  = res.get("return_dict", {}).get("converged_jy", False)
 
-        self.log_message("─" * 60)
+        self.log_message("" * 60)
         self.log_message("MEMFCS RESULTS SUMMARY")
-        self.log_message("─" * 60)
+        self.log_message("" * 60)
         self.log_message(
             f"Single-component fit chi2 = {chi2_sc:.3f}"
         )
@@ -3679,7 +3705,7 @@ class ModularRICSGUI:
         )
         self.log_message("")
         self.log_message("INTERPRETATION GUIDE")
-        self.log_message("─" * 60)
+        self.log_message("" * 60)
 
         if not np.isnan(chi2_sc):
             if chi2_sc < 2.0:
@@ -3768,7 +3794,7 @@ class ModularRICSGUI:
             "0.5d = moderate  |  "
             "1.0d ≈ flat Shannon prior"
         )
-        self.log_message("─" * 60)
+        self.log_message("" * 60)
     def run_fcsfit(self):
         if self._is_worker_running("fcsfit_proc"):
             self._showwarning("Warning", "FCS fitting is already running.")
@@ -3871,13 +3897,13 @@ class ModularRICSGUI:
 
         is_memfcs = (fitting_model == "g3diffMEMFCS")
 
-        # ── top-left: correlation curve ───────────────────────────
+        #  top-left: correlation curve 
         ax00 = self.fcsfit_fig.add_subplot(gs[0, 0])
         ax00.semilogx(tau, G,    "r",  label="G observed")
         ax00.semilogx(tau, pred, "g",
                       label="Shannon fit" if is_memfcs else "G fit")
         ax00.fill_between(tau, G - sigma, G + sigma,
-                          color="b", alpha=0.2, label="±σ")
+                          color="b", alpha=0.2, label=r"±$\sigma$")
 
         if is_memfcs:
             G_fit_jy = res.get("memfcs_G_fit_jy")
@@ -3894,13 +3920,13 @@ class ModularRICSGUI:
                               label=(f"1-comp "
                                      f"chi2={rd.get('chi2_sc', 0):.2f}"))
 
-        ax00.set_xlabel("τ (s)")
-        ax00.set_ylabel("G(τ)")
+        ax00.set_xlabel(r"$\tau$ (s)")
+        ax00.set_ylabel(r"G($\tau$)")
         ax00.set_title("Correlation curve")
         ax00.legend(fontsize=8)
         ax00.grid(True, alpha=0.3)
 
-        # ── top-right: weighted residuals ─────────────────────────
+        #  top-right: weighted residuals 
         ax01 = self.fcsfit_fig.add_subplot(gs[0, 1])
         ax01.semilogx(tau, wr, "g", linewidth=1,
                       label="Shannon" if is_memfcs else None)
@@ -3917,12 +3943,12 @@ class ModularRICSGUI:
                               "b", linewidth=1, alpha=0.7, label="Jaynes")
             ax01.legend(fontsize=8)
 
-        ax01.set_xlabel("τ (s)")
+        ax01.set_xlabel(r"$\tau$ (s)")
         ax01.set_ylabel("Weighted residual")
         ax01.set_title("Weighted residuals")
         ax01.grid(True, alpha=0.3)
 
-        # ── bottom-left: D distribution (MEMFCS) / iMSD (others) ─
+        #  bottom-left: D distribution (MEMFCS) / iMSD (others) 
         ax10 = self.fcsfit_fig.add_subplot(gs[1, 0])
 
         if is_memfcs:
@@ -3985,20 +4011,20 @@ class ModularRICSGUI:
                 else:
                     ax10.semilogx(tau, G,    "r", label="G observed")
                     ax10.semilogx(tau, pred, "g", label="G fit")
-                    ax10.set_ylabel("G(τ)")
+                    ax10.set_ylabel(r"G($\tau$)")
                     ax10.set_title("Correlation (log-log)")
                     ax10.legend(fontsize=8)
             else:
                 ax10.semilogx(tau, G,    "r", label="G observed")
                 ax10.semilogx(tau, pred, "g", label="G fit")
-                ax10.set_ylabel("G(τ)")
+                ax10.set_ylabel(r"G($\tau$)")
                 ax10.set_title("Correlation")
                 ax10.legend(fontsize=8)
 
-            ax10.set_xlabel("τ (s)")
+            ax10.set_xlabel(r"$\tau$ (s)")
             ax10.grid(True, alpha=0.3)
 
-        # ── bottom-right: R_h (MEMFCS) / residual histogram (others)
+        #  bottom-right: R_h (MEMFCS) / residual histogram (others)
         ax11 = self.fcsfit_fig.add_subplot(gs[1, 1])
 
         if is_memfcs:
@@ -4058,7 +4084,7 @@ class ModularRICSGUI:
         self.fcsfit_fig.tight_layout()
         self.fcsfit_canvas.draw()
 
-        # ── per-file outputs ──────────────────────────────────────
+        #  per-file outputs 
         edit_path = self.fcs_make_edit_path(base_path, fitting_model)
 
         if write_summary:
@@ -4641,7 +4667,7 @@ class ModularRICSGUI:
                   width=10).grid(row=row, column=1, sticky="w")
 
         row += 1
-        ttk.Label(params_frame, text="Frame skip (lag τ):").grid(
+        ttk.Label(params_frame, text=r"Frame skip (lag $\tau$):").grid(
             row=row, column=0, sticky="w")
         self.ics_frame_skip = tk.StringVar(value="1")
         ttk.Entry(params_frame, textvariable=self.ics_frame_skip,
@@ -5707,8 +5733,643 @@ class ModularRICSGUI:
         self.log_message(f"Saved overview SVG: {svg_path}")
 
 
+
+
+    # 
+    # PTU Image / FLIM tab
+    # 
+
+    def create_ptu_image_tab(self):
+        """PTU CLSM image extraction and FLIM mapping tab."""
+        from theatrics.workers.ptu_image_worker import ptu_image_worker_main
+        self._ptu_image_worker_main = ptu_image_worker_main
+
+        tab_frame = ttk.Frame(self.notebook)
+        self.notebook.add(tab_frame, text="PTU Image / FLIM")
+
+        #  scrollable left panel 
+        left_outer = ttk.Frame(tab_frame)
+        left_outer.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        canvas_scroll = tk.Canvas(left_outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(left_outer, orient="vertical",
+                                  command=canvas_scroll.yview)
+        canvas_scroll.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas_scroll.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        p = ttk.Frame(canvas_scroll)
+        _cw = canvas_scroll.create_window((0, 0), window=p, anchor="nw")
+
+        def _on_p_configure(event):
+            canvas_scroll.configure(scrollregion=canvas_scroll.bbox("all"))
+            canvas_scroll.configure(width=p.winfo_reqwidth())
+
+        def _on_canvas_configure(event):
+            if event.width > p.winfo_reqwidth():
+                canvas_scroll.itemconfig(_cw, width=event.width)
+
+        p.bind("<Configure>", _on_p_configure)
+        canvas_scroll.bind("<Configure>", _on_canvas_configure)
+
+        def _mw(event):
+            if event.num == 4:
+                canvas_scroll.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas_scroll.yview_scroll(1, "units")
+            else:
+                canvas_scroll.yview_scroll(int(-1 * event.delta / 120), "units")
+        for w in (canvas_scroll, p):
+            w.bind("<MouseWheel>", _mw)
+            w.bind("<Button-4>", _mw)
+            w.bind("<Button-5>", _mw)
+
+        #  File selection 
+        row = 0
+        ttk.Label(p, text="Data PTU file:").grid(
+            row=row, column=0, sticky="w", pady=2)
+        self.ptu_img_file = tk.StringVar()
+        e1 = ttk.Entry(p, textvariable=self.ptu_img_file, width=34)
+        e1.grid(row=row, column=1, sticky="ew")
+        b1 = ttk.Button(p, text="Browse", width=8,
+                         command=self._browse_ptu_img_file)
+        b1.grid(row=row, column=2, padx=3)
+        self.register_busy_widget(e1)
+        self.register_busy_widget(b1)
+
+        row += 1
+        ttk.Label(p, text="IRF PTU file:").grid(
+            row=row, column=0, sticky="w", pady=2)
+        self.ptu_img_irf = tk.StringVar()
+        e2 = ttk.Entry(p, textvariable=self.ptu_img_irf, width=34)
+        e2.grid(row=row, column=1, sticky="ew")
+        b2 = ttk.Button(p, text="Browse", width=8,
+                         command=self._browse_ptu_img_irf)
+        b2.grid(row=row, column=2, padx=3)
+        ttk.Label(p, text="(optional — required for FLIM)",
+                  foreground="gray").grid(row=row, column=3, sticky="w", padx=4)
+
+        row += 1
+        inspect_btn = ttk.Button(
+            p, text="Inspect file (load channel info)",
+            command=self._inspect_ptu_img_file,
+        )
+        inspect_btn.grid(row=row, column=0, columnspan=4, pady=4, sticky="w")
+        self.register_busy_widget(inspect_btn)
+
+        #  Channel info panel (populated by Inspect) 
+        row += 1
+        ttk.Separator(p, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=4)
+        row += 1
+        ttk.Label(p, text=" Channel info ",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        self._ptu_img_channel_info_text = tk.Text(
+            p, height=6, width=48, state="disabled",
+             relief="sunken",
+        )
+        self._ptu_img_channel_info_text.grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=(2, 4))
+
+        #  Channel assignment 
+        row += 1
+        ttk.Separator(p, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=4)
+        row += 1
+        ttk.Label(p, text=" Channel assignment ",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Green channels:").grid(row=row, column=0, sticky="w")
+        self.ptu_img_green_ch = tk.StringVar(value="0")
+        ttk.Entry(p, textvariable=self.ptu_img_green_ch, width=14).grid(
+            row=row, column=1, sticky="w")
+        ttk.Label(p, text="comma-separated, e.g. 0  or  0,2",
+                  foreground="gray").grid(row=row, column=2, columnspan=2, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Red channels:").grid(row=row, column=0, sticky="w")
+        self.ptu_img_red_ch = tk.StringVar(value="")
+        ttk.Entry(p, textvariable=self.ptu_img_red_ch, width=14).grid(
+            row=row, column=1, sticky="w")
+        ttk.Label(p, text="leave blank for single-channel",
+                  foreground="gray").grid(row=row, column=2, columnspan=2, sticky="w")
+
+        #  PIE settings 
+        row += 1
+        ttk.Separator(p, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=4)
+        row += 1
+        self.ptu_img_use_pie = tk.BooleanVar(value=False)
+        ttk.Checkbutton(p, text="PIE mode (Pulsed Interleaved Excitation)",
+                        variable=self.ptu_img_use_pie).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Prompt gate (0–1):").grid(row=row, column=0, sticky="w")
+        pg_frame = ttk.Frame(p)
+        pg_frame.grid(row=row, column=1, sticky="w")
+        self.ptu_img_prompt_start = tk.StringVar(value="0.0")
+        self.ptu_img_prompt_stop  = tk.StringVar(value="0.5")
+        ttk.Entry(pg_frame, textvariable=self.ptu_img_prompt_start,
+                  width=6).pack(side=tk.LEFT)
+        ttk.Label(pg_frame, text=" – ").pack(side=tk.LEFT)
+        ttk.Entry(pg_frame, textvariable=self.ptu_img_prompt_stop,
+                  width=6).pack(side=tk.LEFT)
+        ttk.Label(p, text="relative (0=start, 1=end of TCSPC period)",
+                  foreground="gray").grid(row=row, column=2, columnspan=2, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Delay gate (0–1):").grid(row=row, column=0, sticky="w")
+        dg_frame = ttk.Frame(p)
+        dg_frame.grid(row=row, column=1, sticky="w")
+        self.ptu_img_delay_start = tk.StringVar(value="0.5")
+        self.ptu_img_delay_stop  = tk.StringVar(value="1.0")
+        ttk.Entry(dg_frame, textvariable=self.ptu_img_delay_start,
+                  width=6).pack(side=tk.LEFT)
+        ttk.Label(dg_frame, text=" – ").pack(side=tk.LEFT)
+        ttk.Entry(dg_frame, textvariable=self.ptu_img_delay_stop,
+                  width=6).pack(side=tk.LEFT)
+
+        #  Frame range 
+        row += 1
+        ttk.Separator(p, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=4)
+        row += 1
+        ttk.Label(p, text=" Frame range ",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Frame start:").grid(row=row, column=0, sticky="w")
+        self.ptu_img_frame_start = tk.StringVar(value="0")
+        ttk.Entry(p, textvariable=self.ptu_img_frame_start, width=8).grid(
+            row=row, column=1, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Frame end:").grid(row=row, column=0, sticky="w")
+        self.ptu_img_frame_end = tk.StringVar(value="-1")
+        ttk.Entry(p, textvariable=self.ptu_img_frame_end, width=8).grid(
+            row=row, column=1, sticky="w")
+        ttk.Label(p, text="-1 = all frames",
+                  foreground="gray").grid(row=row, column=2, sticky="w")
+
+        #  FLIM settings 
+        row += 1
+        ttk.Separator(p, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=4)
+        row += 1
+        ttk.Label(p, text=" FLIM settings ",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Min photons per pixel:").grid(
+            row=row, column=0, sticky="w")
+        self.ptu_img_min_photons = tk.StringVar(value="30")
+        ttk.Entry(p, textvariable=self.ptu_img_min_photons, width=8).grid(
+            row=row, column=1, sticky="w")
+
+        row += 1
+        self.ptu_img_stack_frames = tk.BooleanVar(value=True)
+        ttk.Checkbutton(p, text="Stack all frames before FLIM fitting",
+                        variable=self.ptu_img_stack_frames).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        #  Output options 
+        row += 1
+        ttk.Separator(p, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", pady=4)
+        row += 1
+        ttk.Label(p, text=" Output options ",
+                  font=("", 9, "bold")).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        self.ptu_img_save_tif = tk.BooleanVar(value=True)
+        ttk.Checkbutton(p, text="Save intensity images as TIFF",
+                        variable=self.ptu_img_save_tif).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        self.ptu_img_save_flim = tk.BooleanVar(value=True)
+        ttk.Checkbutton(p, text="Save FLIM lifetime maps as TIFF",
+                        variable=self.ptu_img_save_flim).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        self.ptu_img_save_svg = tk.BooleanVar(value=True)
+        ttk.Checkbutton(p, text="Save SVG previews",
+                        variable=self.ptu_img_save_svg).grid(
+            row=row, column=0, columnspan=4, sticky="w")
+
+        row += 1
+        ttk.Label(p, text="Output folder:").grid(
+            row=row, column=0, sticky="w", pady=2)
+        self.ptu_img_out_dir = tk.StringVar(value="")
+        e_out = ttk.Entry(p, textvariable=self.ptu_img_out_dir, width=34)
+        e_out.grid(row=row, column=1, sticky="ew")
+        b_out = ttk.Button(p, text="Browse",
+                           command=self._browse_ptu_img_out_dir)
+        b_out.grid(row=row, column=2, padx=3)
+        ttk.Label(p, text="(blank = auto next to PTU)",
+                  foreground="gray").grid(row=row, column=3, sticky="w")
+        self.register_busy_widget(e_out)
+        self.register_busy_widget(b_out)
+
+        #  Run button 
+        row += 1
+        btn_frame = ttk.Frame(p)
+        btn_frame.grid(row=row, column=0, columnspan=4, pady=12)
+        self.ptu_img_run_btn = ttk.Button(
+            btn_frame, text="Extract Images / FLIM",
+            command=self._run_ptu_image,
+        )
+        self.ptu_img_run_btn.pack(side=tk.LEFT, padx=5)
+        self.register_busy_widget(self.ptu_img_run_btn)
+
+        #  Right panel: display 
+        display_frame = ttk.LabelFrame(tab_frame, text="Image Display", padding=10)
+        display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.ptu_img_fig    = Figure(figsize=(9, 7), dpi=100, facecolor="white")
+        self.ptu_img_canvas = FigureCanvasTkAgg(self.ptu_img_fig, display_frame)
+        self.ptu_img_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(self.ptu_img_canvas, display_frame)
+        toolbar.update()
+
+    #  browse helpers 
+
+    def _browse_ptu_img_file(self):
+        fn = self._ask_open_filename(
+            title="Select data PTU file",
+            filetypes=[("PicoQuant PTU", "*.ptu"), ("All files", "*.*")],
+        )
+        if fn:
+            self.ptu_img_file.set(fn)
+
+    def _browse_ptu_img_irf(self):
+        fn = self._ask_open_filename(
+            title="Select IRF PTU file",
+            filetypes=[("PicoQuant PTU", "*.ptu"), ("All files", "*.*")],
+        )
+        if fn:
+            self.ptu_img_irf.set(fn)
+
+    def _browse_ptu_img_out_dir(self):
+        folder = self._ask_directory(title="Select output folder")
+        if folder:
+            self.ptu_img_out_dir.set(folder)
+
+    #  inspect (fast: load channel info only) 
+
+    def _inspect_ptu_img_file(self):
+        ptu_path = self.ptu_img_file.get().strip()
+        if not ptu_path:
+            messagebox.showwarning("Warning",
+                                   "Please select a data PTU file first.")
+            return
+        if self._is_worker_running("ptu_img_proc"):
+            messagebox.showwarning("Warning",
+                                   "Image extraction already running.")
+            return
+
+        self.log_message(f"Inspecting {os.path.basename(ptu_path)} ...")
+        self.status_var.set("Inspecting PTU file...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        self.ptu_img_queue        = multiprocessing.Queue()
+        self.ptu_img_cancel_event = multiprocessing.Event()
+
+        self.ptu_img_proc = multiprocessing.Process(
+            target=self._ptu_image_worker_main,
+            args=({"task": "inspect", "ptu_path": ptu_path},
+                  self.ptu_img_queue, self.ptu_img_cancel_event),
+            daemon=False,
+        )
+        self.ptu_img_proc.start()
+        self._poll_ptu_img_queue()
+
+    def _apply_inspect_result(self, info: dict):
+        """
+        Populate the channel info panel and suggest channel assignments
+        based on the inspect result.
+        """
+        n_used   = info.get("n_micro_time_bins", "?")
+        n_header = info.get("n_micro_time_bins_header", "?")
+        micro_ns = info.get("micro_time_res_ns", 0.0)
+        macro_ns = info.get("macro_time_res_ns", 0.0)
+        n_frames = info.get("n_frames", "?")
+        n_photons = info.get("n_photons", 0)
+        detector_ch = info.get("detector_channels", [])
+        marker_ch   = info.get("marker_channels", [])
+        photons_per = info.get("photons_per_channel", {})
+
+        lines = [
+            f"Frames          : {n_frames}",
+            f"Total photons   : {n_photons:,}",
+            f"TCSPC bins used : {n_used}  "
+            f"({n_used * micro_ns:.2f} ns period)",
+            f"Bin width       : {micro_ns*1000:.1f} ps",
+            f"(header alloc.  : {n_header} bins — not used for PIE)",
+            "",
+        ]
+        lines.append(f"{'Ch':>3}  {'Photons':>10}  {'Fraction':>8}  Verdict")
+        lines.append(f"{'':>3}  {'':>10}  {'':>8}  ")
+        total = max(n_photons, 1)
+        for ch, n in sorted(photons_per.items()):
+            verdict = "DETECTOR" if ch in detector_ch else "marker"
+            lines.append(f"{ch:>3}  {n:>10,}  {n/total:>8.2%}  {verdict}")
+
+        text_content = "\n".join(lines)
+
+        self._ptu_img_channel_info_text.configure(state="normal")
+        self._ptu_img_channel_info_text.delete("1.0", tk.END)
+        self._ptu_img_channel_info_text.insert("1.0", text_content)
+        self._ptu_img_channel_info_text.configure(state="disabled")
+
+        # auto-suggest channel assignment from detector channels
+        if len(detector_ch) >= 2:
+            self.ptu_img_green_ch.set(str(detector_ch[0]))
+            self.ptu_img_red_ch.set(str(detector_ch[1]))
+        elif len(detector_ch) == 1:
+            self.ptu_img_green_ch.set(str(detector_ch[0]))
+            self.ptu_img_red_ch.set("")
+
+        self.log_message(
+            f"Inspect complete — "
+            f"{n_frames} frames, {n_photons:,} photons, "
+            f"{n_used} TCSPC bins ({n_used * micro_ns:.2f} ns)"
+        )
+        self.log_message(
+            f"  Detector channels : {detector_ch}  "
+            f"Marker channels : {marker_ch}"
+        )
+
+    #  run 
+
+    def _run_ptu_image(self):
+        if self._is_worker_running("ptu_img_proc"):
+            messagebox.showwarning("Warning",
+                                   "Image extraction already running.")
+            return
+
+        ptu_path = self.ptu_img_file.get().strip()
+        if not ptu_path:
+            messagebox.showwarning("Warning",
+                                   "Please select a data PTU file.")
+            return
+
+        params = dict(
+            task              = "export",
+            ptu_path          = ptu_path,
+            irf_path          = self.ptu_img_irf.get().strip(),
+            green_channels    = self.ptu_img_green_ch.get().strip(),
+            red_channels      = self.ptu_img_red_ch.get().strip(),
+            use_pie           = bool(self.ptu_img_use_pie.get()),
+            prompt_start      = self._safe_float(
+                                    self.ptu_img_prompt_start, "Prompt start", 0.0),
+            prompt_stop       = self._safe_float(
+                                    self.ptu_img_prompt_stop,  "Prompt stop",  0.5),
+            delay_start       = self._safe_float(
+                                    self.ptu_img_delay_start,  "Delay start",  0.5),
+            delay_stop        = self._safe_float(
+                                    self.ptu_img_delay_stop,   "Delay stop",   1.0),
+            frame_start       = self._safe_int(
+                                    self.ptu_img_frame_start, "Frame start", 0),
+            frame_end         = self._safe_int(
+                                    self.ptu_img_frame_end,   "Frame end",   -1),
+            stack_frames_flim = bool(self.ptu_img_stack_frames.get()),
+            min_photons_flim  = self._safe_int(
+                                    self.ptu_img_min_photons, "Min photons", 30),
+            save_tif          = bool(self.ptu_img_save_tif.get()),
+            save_flim         = bool(self.ptu_img_save_flim.get()),
+            save_svg          = bool(self.ptu_img_save_svg.get()),
+            out_dir           = self.ptu_img_out_dir.get().strip(),
+        )
+
+        self.log_message("Starting PTU image extraction...")
+        self.status_var.set("Extracting PTU images...")
+        self.progress_var.set(0.0)
+        self.progress_bar.grid()
+
+        self.ptu_img_queue        = multiprocessing.Queue()
+        self.ptu_img_cancel_event = multiprocessing.Event()
+
+        self.ptu_img_proc = multiprocessing.Process(
+            target=self._ptu_image_worker_main,
+            args=(params, self.ptu_img_queue, self.ptu_img_cancel_event),
+            daemon=False,
+        )
+        self.ptu_img_proc.start()
+        self._poll_ptu_img_queue()
+
+    #  queue polling 
+
+    def _poll_ptu_img_queue(self):
+        try:
+            while True:
+                msg_type, payload = self.ptu_img_queue.get_nowait()
+
+                if msg_type == "progress":
+                    self.set_ui_busy(True)
+                    self.progress_var.set(float(payload))
+
+                elif msg_type == "inspected":
+                    # fast path — no image display, just fill the info panel
+                    self._apply_inspect_result(payload)
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    return
+
+                elif msg_type == "done":
+                    self._update_ptu_img_display(payload)
+                    self._log_ptu_img_result(payload)
+                    self.set_ui_busy(False)
+                    self.status_var.set("Ready")
+                    self.progress_bar.grid_remove()
+                    return
+
+                elif msg_type == "cancelled":
+                    self.log_message("PTU image extraction cancelled.")
+                    self.status_var.set("Cancelled")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    return
+
+                elif msg_type == "error":
+                    self.log_message(payload)
+                    self.status_var.set("Error")
+                    self.progress_bar.grid_remove()
+                    self.set_ui_busy(False)
+                    messagebox.showerror("PTU Image Error",
+                                         "Operation failed. See log.")
+                    return
+
+        except queue.Empty:
+            pass
+
+        if (self.ptu_img_proc is not None
+                and not self.ptu_img_proc.is_alive()):
+            self.set_ui_busy(False)
+            self.status_var.set("Error")
+            self.progress_bar.grid_remove()
+            self.log_message("PTU image worker terminated unexpectedly.")
+            return
+
+        self.root.after(50, self._poll_ptu_img_queue)
+
+    #  display 
+
+    def _update_ptu_img_display(self, res: dict):
+        """
+        Show a figure with:
+          Row 0 : all intensity images side by side
+          Row 1 : all FLIM lifetime maps (if any)
+          Row 2 : TCSPC histogram(s) with PIE window shading
+        """
+        self.ptu_img_fig.clear()
+
+        intensity       = res.get("intensity_images", {})
+        flim            = res.get("flim_images", {})
+        tcspc           = res.get("tcspc_hist", {})
+        n_micro         = res.get("n_micro_time_bins", 1)
+        micro_res_ns    = res.get("micro_time_res_ns", 0.04)
+        prompt_range    = res.get("prompt_range", [])
+        delay_range     = res.get("delay_range",  [])
+        use_pie         = res.get("use_pie", False)
+
+        n_int   = len(intensity)
+        n_flim  = len(flim)
+        n_tcspc = len(tcspc)
+
+        if n_int == 0 and n_tcspc == 0:
+            return
+
+        n_rows = (
+            (1 if n_int   else 0) +
+            (1 if n_flim  else 0) +
+            (1 if n_tcspc else 0)
+        )
+        n_cols = max(n_int, n_flim, 1)
+
+        gs = gridspec.GridSpec(n_rows, n_cols, figure=self.ptu_img_fig,
+                               hspace=0.45, wspace=0.35)
+
+        current_row = 0
+
+        # row 0: intensity images
+        if n_int:
+            for col, (label, img) in enumerate(intensity.items()):
+                ax = self.ptu_img_fig.add_subplot(gs[current_row, col])
+                im = ax.imshow(img, cmap="cividis")
+                ax.set_title(f"Intensity\n{label}", fontsize=8)
+                ax.axis("off")
+                self.ptu_img_fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            current_row += 1
+
+        # row 1: FLIM lifetime maps
+        if n_flim:
+            for col, (label, img) in enumerate(flim.items()):
+                ax = self.ptu_img_fig.add_subplot(gs[current_row, col])
+                im = ax.imshow(img, cmap="CMRmap")
+                ax.set_title(f"Mean lifetime\n{label} (ns)", fontsize=8)
+                ax.axis("off")
+                self.ptu_img_fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            current_row += 1
+
+        # last row: TCSPC histograms
+        # x-axis is TCSPC bin index (0 to n_micro_time_bins-1),
+        # cropped to the actually-used range — exactly as in the tttrlib examples
+        if n_tcspc:
+            ax_tcspc = self.ptu_img_fig.add_subplot(gs[current_row, :])
+            colors   = ["green", "red", "blue", "orange",
+                        "purple", "limegreen", "tomato", "gray"]
+
+            for idx, (label, (counts, bins)) in enumerate(tcspc.items()):
+                bins_to_ns = bins*micro_res_ns
+                ax_tcspc.semilogy(
+                    bins_to_ns,
+                    np.maximum(counts, 0.1),
+                    color=colors[idx % len(colors)],
+                    linewidth=1.0,
+                    label=label,
+                )
+
+            # PIE window shading — bins are already in the used range
+            if use_pie and prompt_range and delay_range:
+                ax_tcspc.axvspan(
+                    prompt_range[0], prompt_range[1],
+                    color="blue", alpha=0.08, label="Prompt",
+                )
+                ax_tcspc.axvspan(
+                    delay_range[0], delay_range[1],
+                    color="orange", alpha=0.08, label="Delay",
+                )
+
+            ax_tcspc.set_xlim(0, n_micro * micro_res_ns)
+            ax_tcspc.set_xlabel(
+                f"TCSPC bins  [ns]"
+                # f"(bin width = {micro_res_ns*1000:.1f} ps  |  "
+                # f"range = {n_micro * micro_res_ns:.1f} ns)"
+            )
+            ax_tcspc.set_ylabel("Counts")
+            ax_tcspc.set_title("TCSPC histograms", fontsize=9)
+            ax_tcspc.legend(fontsize=7, ncol=4)
+            ax_tcspc.grid(True, alpha=0.3)
+
+        # self.ptu_img_fig.tight_layout()
+        self.ptu_img_canvas.draw()
+
+        # save overview SVG
+        out_dir = res.get("out_dir", "")
+        if out_dir:
+            svg_path = os.path.join(out_dir, "overview.svg")
+            try:
+                self.ptu_img_fig.savefig(
+                    svg_path, dpi=150, bbox_inches="tight", facecolor="white"
+                )
+                self.log_message(f"Saved overview SVG: {svg_path}")
+            except Exception:
+                pass
+
+    def _log_ptu_img_result(self, res: dict):
+        n_micro      = res.get("n_micro_time_bins", "?")
+        micro_res_ns = res.get("micro_time_res_ns", 0.0)
+        self.log_message(f"Output folder : {res.get('out_dir')}")
+        self.log_message(
+            f"Frames        : {res.get('n_frames')}  |  "
+            f"TCSPC bins    : {n_micro} "
+            f"({n_micro * micro_res_ns:.2f} ns)"
+        )
+        if res.get("use_pie"):
+            pr = res.get("prompt_range", [])
+            dr = res.get("delay_range",  [])
+            self.log_message(
+                f"PIE prompt    : bins {pr}  "
+                f"({pr[0]*micro_res_ns:.2f} – {pr[1]*micro_res_ns:.2f} ns)"
+            )
+            self.log_message(
+                f"PIE delay     : bins {dr}  "
+                f"({dr[0]*micro_res_ns:.2f} – {dr[1]*micro_res_ns:.2f} ns)"
+            )
+        for label, img in res.get("intensity_images", {}).items():
+            self.log_message(f"  Intensity [{label}] : {img.shape}  max={img.max()}")
+        for label, img in res.get("flim_images", {}).items():
+            self.log_message(
+                f"  FLIM      [{label}] : {img.shape}  "
+                f"max={np.nanmax(img):.4f} ns"
+            )
+        for path in res.get("saved_files", []):
+            self.log_message(f"  Saved: {os.path.basename(path)}")
     # -----------------------------------------------------------------------------------------------------------------------------------------------------------
-    # ------------------------------------------------- Vesicle Finder GUI ------------------------------------------------------------------
+    # ------------------------------------------------- AFM GUI ------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------------------------------------------------------------
     def create_afm_tab(self):
         from theatrics.workers.afm_worker import afm_worker_main
@@ -6144,7 +6805,7 @@ class ModularRICSGUI:
         """Redraw only the AFM image panel — removes old colorbar first."""
         ax = self._afm_ax_image
 
-        # ── remove any existing colorbar axes ──────────────────
+        #  remove any existing colorbar axes 
         # matplotlib attaches the colorbar to a stored attribute
         # if we set it ourselves; remove it before clearing
         if hasattr(self, "_afm_colorbar") and self._afm_colorbar is not None:
@@ -6739,6 +7400,7 @@ class ModularRICSGUI:
             "ics_cancel_event",
             "afm_cancel_event",
             "ptu_fcs_cancel_event",
+            "ptu_img_cancel_event",
 
         ):
             ev = getattr(self, ev_attr, None)
@@ -6770,11 +7432,11 @@ class ModularRICSGUI:
                 setattr(self, proc_attr, None)
 
         # 2–3) Stop any known worker processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc","ptu_fcs_proc",):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc","ptu_fcs_proc","ptu_img_proc",):
             _stop_proc(proc_attr)
 
         # 4) Close queues properly (prevents resource_tracker semaphore warnings)
-        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue","afm_queue","ptu_fcs_queue",):
+        for qattr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue","afm_queue","ptu_fcs_queue","ptu_img_queue",):
             q = getattr(self, qattr, None)
             try:
                 if q is not None:
@@ -6797,6 +7459,7 @@ class ModularRICSGUI:
             "vesicle_cancel_event",
             "afm_cancel_event",
             "ptu_fcs_cancel_event",
+            "ptu_img_cancel_event",
         ):
             setattr(self, ev_attr, None)
 
@@ -6845,7 +7508,7 @@ class ModularRICSGUI:
     
     def _cleanup_mp(self):
         # terminate running processes
-        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc","ptu_fcs_proc",):
+        for proc_attr in ("sfcs_proc", "export_proc", "fit_proc", "sim_proc", "diffmap_proc", "fcsfit_proc", "frap_proc","vesicle_proc","ics_proc","afm_proc","ptu_fcs_proc","ptu_img_proc",):
             p = getattr(self, proc_attr, None)
             try:
                 if p is not None and p.is_alive():
@@ -6856,7 +7519,7 @@ class ModularRICSGUI:
             setattr(self, proc_attr, None)
 
         # close queues properly
-        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue", "afm_queue","ptu_fcs_queue",):
+        for q_attr in ("sfcs_queue", "export_queue", "fit_queue", "sim_queue", "diffmap_queue", "fcsfit_queue", "frap_queue","vesicle_queue","ics_queue", "afm_queue","ptu_fcs_queue","ptu_img_queue",):
             q = getattr(self, q_attr, None)
             try:
                 if q is not None:

@@ -2,7 +2,7 @@
 theatrics/splash.py
 
 Minimal splash screen shown at startup.
-Displays the theatRICS logo PNG centred on screen.
+Displays the theatRICS logo PNG stretched to fill the entire screen.
 Requires Pillow (pip install Pillow).
 """
 
@@ -13,13 +13,15 @@ import tkinter as tk
 from PIL import Image, ImageTk
 
 
-# Path to logo relative to this file
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "theatrics_splash.png")
 
 
 class SplashScreen:
 
     def __init__(self, root: tk.Tk, logo_width_px: int = 420):
+        # logo_width_px kept for backwards-compatible signature but no
+        # longer used -- the image now fills the whole screen instead of
+        # being shown at a fixed width.
         self._root      = root
         self._dismissed = False
         self._photo     = None   # prevent GC
@@ -29,34 +31,53 @@ class SplashScreen:
         self._win = tk.Toplevel(root)
         self._win.overrideredirect(True)
         self._win.attributes("-topmost", True)
-        self._win.configure(background="white")
 
-        # load and resize logo
-        img    = Image.open(_LOGO_PATH)
-        w, h   = img.size
-        new_h  = max(1, int(h * logo_width_px / w))
-        img    = img.resize((logo_width_px, new_h), Image.LANCZOS)
-
-        # # handle transparency
-        # if img.mode in ("RGBA", "LA", "P"):
-        #     bg = Image.new("RGBA", img.size, "white")
-        #     if img.mode == "P":
-        #         img = img.convert("RGBA")
-        #     bg.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
-        #     img = bg.convert("RGB")
-
-        self._photo = ImageTk.PhotoImage(img)
-        tk.Label(self._win, image=self._photo, bd=0).pack()
-
-        self._win.update_idletasks()
-
-        # centre on screen
         sw = self._win.winfo_screenwidth()
         sh = self._win.winfo_screenheight()
-        ww = self._win.winfo_width()
-        wh = self._win.winfo_height()
-        self._win.geometry(f"+{(sw - ww) // 2}+{(sh - wh) // 2}")
+        self._win.geometry(f"{sw}x{sh}+0+0")
 
+        # BILINEAR instead of LANCZOS: much faster, plenty good enough
+        # for a splash screen shown for well under a second.
+        img = Image.open(_LOGO_PATH).convert("RGB")
+        img = img.resize((sw, sh), Image.BILINEAR)
+
+        self._photo = ImageTk.PhotoImage(img)
+        label = tk.Label(self._win, image=self._photo, bd=0)
+        label.place(x=0, y=0, width=sw, height=sh)
+
+        # ── status text, pinned to bottom-center ────────────────────────
+        self._status_var = tk.StringVar(value="")
+        self._status_label = tk.Label(
+            self._win,
+            textvariable=self._status_var,
+            font=("", 11),
+            fg="white",
+            bg="black",
+            padx=12,
+            pady=4,
+        )
+        # place near the bottom, horizontally centred
+        self._status_label.place(relx=0.5, rely=0.96, anchor="s")
+        # Force an immediate repaint so the splash is visible right away,
+        # even if the caller doesn't call root.update() themselves.
+        self._win.update_idletasks()
+        self._win.update()
+
+    def set_status(self, text: str):
+        """
+        Update the small status line at the bottom of the splash screen.
+        Safe to call repeatedly from main() while heavy imports / setup
+        happen, since it forces an immediate repaint (the main event loop
+        isn't running yet at that point).
+        """
+        if self._dismissed:
+            return
+        try:
+            self._status_var.set(text)
+            self._win.update_idletasks()
+            self._win.update()
+        except Exception:
+            pass
     def dismiss(self):
         if self._dismissed:
             return
